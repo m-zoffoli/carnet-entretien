@@ -557,7 +557,8 @@ function viewOnboarding() {
 
 const VIEWS = { home: viewHome, calendar: viewCalendar, maintenance: viewMaintenance, invoices: viewInvoices, budget: viewBudget, vehicle: viewVehicle };
 const TABS = [['home', 'Accueil'], ['maintenance', 'Entretien'], ['invoices', 'Factures'], ['budget', 'Budget']];
-const ALERT_TAB = '<button class="tab-alert" data-action="alert">Message d’alerte</button>';
+const ALERT_TAB = '<button class="tab-alert" data-action="menu-alert">Message d’alerte</button>';
+const BURGER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
 const tabButton = ([view, label]) => `<button data-action="go" data-view="${view}" ${S.view === view ? 'aria-current="page"' : ''}>${label}</button>`;
 
 function render() {
@@ -569,7 +570,21 @@ function render() {
   root.querySelectorAll('[data-lane]').forEach((el) => el.style.setProperty('--lane', el.dataset.lane));
   setupTimeline();
   tabs.hidden = false;
-  tabs.innerHTML = [...TABS.slice(0, 2).map(tabButton), ALERT_TAB, ...TABS.slice(2).map(tabButton)].join('');
+  S.menuOpen = false;
+  renderMenu();
+}
+
+function renderMenu() {
+  const items = [...TABS.slice(0, 2).map(tabButton), ALERT_TAB, ...TABS.slice(2).map(tabButton)].join('');
+  tabs.innerHTML = `
+    <button class="burger" data-action="menu" aria-label="Menu" aria-expanded="${Boolean(S.menuOpen)}">${BURGER_ICON}</button>
+    ${S.menuOpen ? `<div class="menu">${items}</div>` : ''}`;
+}
+
+function closeMenu() {
+  if (!S.menuOpen) return;
+  S.menuOpen = false;
+  renderMenu();
 }
 
 // --- Fenêtres ----------------------------------------------------------------
@@ -1098,6 +1113,8 @@ const ACTIONS = {
   close: closeModal,
   km: kmModal,
   alert: alertChoiceModal,
+  menu: () => { S.menuOpen = !S.menuOpen; renderMenu(); },
+  'menu-alert': () => { closeMenu(); alertChoiceModal(); },
   'ask-claude': () => navigator.clipboard?.writeText(claudePrompt).catch(() => {}),
   'alert-form': () => alertFormModal(),
   'budget-year': ({ year }) => { S.budgetYear = year; render(); },
@@ -1184,7 +1201,10 @@ const ACTIONS = {
   },
 };
 
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMenu(); });
+
 document.addEventListener('click', async (event) => {
+  if (!event.target.closest('#tabs')) closeMenu();
   const target = event.target.closest('[data-action]');
   if (!target) return;
   try {
