@@ -171,7 +171,7 @@ function kmGauge(items, km) {
   });
 
   return `
-    <div class="gauge">
+    <div class="gauge" data-action="go" data-view="maintenance">
       <div class="gauge-bar">
         <span class="gauge-fill" data-at="${at(km)}"></span>
         ${marks.join('')}
