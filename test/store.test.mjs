@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 globalThis.sessionStorage = { getItem: () => null, setItem() {}, removeItem() {} };
 globalThis.localStorage = { getItem: () => 'refresh', setItem() {}, removeItem() {} };
-const { ConflictError, DropboxStore, headerJson } = await import('../js/store.js');
+const { ConflictError, DropboxStore, MissingScopeError, headerJson } = await import('../js/store.js');
 
 const json = (status, body) => new Response(JSON.stringify(body), { status });
 
@@ -52,6 +52,36 @@ test('un jeton expiré est renouvelé une fois', async () => {
     const store = new DropboxStore('/Carnet', fetchImpl, 'vieux');
     assert.equal(await store.save({}, 'r1'), 'r2');
     assert.deepEqual(seen, ['Bearer vieux', 'Bearer neuf']);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('le lien du calendrier est créé en public, en lecture seule', async () => {
+  let sent;
+  const store = new DropboxStore('/Carnet', async (url, init) => {
+    sent = { url, arg: JSON.parse(init.body) };
+    return json(200, { url: 'https://dropbox/lien' });
+  }, 'tok');
+  assert.equal(await store.sharedLink('echeances.ics'), 'https://dropbox/lien');
+  assert.match(sent.url, /create_shared_link_with_settings$/);
+  assert.deepEqual(sent.arg, { path: '/Carnet/echeances.ics', settings: { audience: 'public', access: 'viewer' } });
+});
+
+test('un lien déjà existant est réutilisé', async () => {
+  const store = new DropboxStore('/Carnet', async () => json(409, {
+    error_summary: 'shared_link_already_exists/..',
+    error: { shared_link_already_exists: { metadata: { url: 'https://dropbox/existant' } } },
+  }), 'tok');
+  assert.equal(await store.sharedLink('echeances.ics'), 'https://dropbox/existant');
+});
+
+test('un droit manquant est signalé pour pouvoir le demander', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => json(200, { access_token: 'neuf' }); // le renouvellement du jeton après le 401
+  try {
+    const store = new DropboxStore('/Carnet', async () => json(401, { error: { '.tag': 'missing_scope' } }), 'tok');
+    await assert.rejects(store.sharedLink('echeances.ics'), MissingScopeError);
   } finally {
     globalThis.fetch = realFetch;
   }

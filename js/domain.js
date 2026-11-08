@@ -45,7 +45,7 @@ export function uid(prefix = 'id') {
 export function kmStats(carnet, today) {
   const readings = [...carnet.readings].sort((a, b) => a.date.localeCompare(b.date));
   const latest = readings[readings.length - 1];
-  if (!latest) return { km: 0, lastKm: 0, lastDate: null, perDay: 0, perYear: 0 };
+  if (!latest) return { km: 0, lastKm: 0, lastDate: null, perDay: 0, perYear: 0, perMonth: 0, monthsEstimated: 0 };
 
   const windowStart = addMonths(latest.date, -18);
   const first = readings.find((r) => r.date >= windowStart);
@@ -57,13 +57,19 @@ export function kmStats(carnet, today) {
     if (age > 0) perDay = latest.km / age;
   }
   perDay = Math.max(perDay, 0);
-  const elapsed = Math.max(diffDays(latest.date, today), 0);
+  // L'estimation avance d'un pas par mois écoulé depuis le dernier relevé. Elle reste un calcul :
+  // l'enregistrer comme relevé fausserait le rythme, qui ne doit venir que de vrais relevés.
+  const perMonth = (perDay * 365.25) / 12;
+  let monthsEstimated = 0;
+  while (addMonths(latest.date, monthsEstimated + 1) <= today) monthsEstimated += 1;
   return {
-    km: Math.round(latest.km + perDay * elapsed),
+    km: Math.round(latest.km + perMonth * monthsEstimated),
     lastKm: latest.km,
     lastDate: latest.date,
     perDay,
     perYear: Math.round(perDay * 365),
+    perMonth: Math.round(perMonth),
+    monthsEstimated,
   };
 }
 
@@ -113,6 +119,48 @@ export function nextDue(op, carnet, today) {
   return { status, date, km: kmAxis, estimated: Boolean(useKm), daysLeft, kmLeft };
 }
 
+/**
+ * Ajoute un historique venu de documents passés. Rejouer le même import ne crée pas de doublon :
+ * un relevé ou une intervention est reconnu à sa date. historyOnly garde l'entrée sans déplacer
+ * l'échéance, pour un geste partiel (un plein d'AdBlue ne vaut pas contrôle du filtre à particules).
+ */
+export function applyHistory(carnet, history) {
+  const summary = { readings: 0, entries: 0 };
+  if (history.vehicle) Object.assign(carnet.vehicle, history.vehicle);
+
+  for (const { date, km } of history.readings ?? []) {
+    if (carnet.readings.some((r) => r.date === date)) continue;
+    carnet.readings.push({ id: `hist-${date}`, date, km, photo: null, note: 'Historique' });
+    summary.readings += 1;
+  }
+
+  for (const spec of history.operations ?? []) {
+    const op = carnet.operations.find((o) => o.id === spec.id);
+    if (!op) continue;
+    op.history = op.history || [];
+    for (const { date, km, note } of spec.done ?? []) {
+      if (op.history.some((entry) => entry.date === date)) continue;
+      op.history.push({ date, km: km ?? null, note: note || '' });
+      summary.entries += 1;
+    }
+    op.history.sort((a, b) => a.date.localeCompare(b.date));
+
+    const last = op.history[op.history.length - 1];
+    if (!spec.historyOnly && last && (!op.lastDoneDate || last.date >= op.lastDoneDate)) {
+      op.lastDoneDate = last.date;
+      op.lastDoneKm = last.km;
+      op.dueDate = null;
+      op.dueKm = null;
+    }
+    if (spec.due) {
+      op.dueDate = spec.due.date ?? null;
+      op.dueKm = spec.due.km ?? null;
+    }
+    if (spec.note && !op.note) op.note = spec.note;
+  }
+  return summary;
+}
+
 export function applyDone(op, { date, km, note }) {
   op.history = op.history || [];
   op.history.push({ date, km: km ?? null, note: note || '' });
@@ -129,16 +177,202 @@ export function sortedOperations(carnet, today) {
     .sort((a, b) => (a.due.date || '9999').localeCompare(b.due.date || '9999'));
 }
 
+// Prix de référence en France, pièces et main-d'œuvre, pour un Touran 2.0 TDI. Ce sont des
+// ordres de grandeur, remplacés dès qu'un coût est saisi. Sans source fiable, pas d'entrée.
+// planKm : rythme supposé pour projeter une opération dont le carnet ne donne pas l'intervalle.
+export const REFERENCE_PRICES = {
+  service: { min: 200, max: 350, planKm: 30000 }, // iDGarages
+  ct: { min: 78, max: 78 }, // Groupama, moyenne voiture légère
+  rappels: { min: 0, max: 0 }, // à la charge du constructeur
+  courroie: { min: 670, max: 960 }, // Mecazen, 2.0 TDI 150 ch
+  boite: { min: 250, max: 400 }, // Odopass
+  habitacle: { min: 62, max: 62 }, // Mecazen, plafond
+  gazole: { min: 31, max: 54 }, // Mecazen, 2.0 TDI 150 ch
+  freins: { min: 140, max: 420 }, // iDGarages : plaquettes seules, jusqu'à plaquettes et disques avant
+  pneus: { min: 320, max: 1000 }, // Groupama, 80 à 250 € par pneu
+  clim: { min: 58, max: 367 }, // Mecazen
+  batterie: { min: 60, max: 300 }, // Groupama
+};
+
+const NUMBER = String.raw`\d{1,3}(?:[ .,]\d{3})+|\d+`;
+const toNumber = (text) => Number(text.replace(/[ .,]/g, ''));
+const MAX_ODOMETER_JUMP = 100000; // au-delà d'un tel saut depuis le dernier relevé, c'est une erreur de lecture
+const MAX_SERVICE_KM = 60000; // aucun intervalle d'entretien n'atteint cette distance
+
+/**
+ * Extrait d'un texte lu sur le tableau de bord le kilométrage et l'échéance du service.
+ * Chaque valeur vaut null si elle n'est pas trouvée : mieux vaut un champ vide qu'une valeur douteuse.
+ */
+export function parseDashboard(text, lastKm = 0) {
+  const clean = text.replace(/\u00a0/g, ' ').replace(/(?<=\d)[oO](?=[\d ])/g, '0');
+  const days = clean.match(/(\d{1,3})\s*(?:jours?|j)\b/i);
+  const hasService = Boolean(days) || /servi|entretien|inspection|vidange/i.test(clean);
+
+  const tagged = [...clean.matchAll(new RegExp(`(${NUMBER})\\s*km\\b`, 'gi'))]
+    .map((m) => ({ value: toNumber(m[1]), index: m.index }));
+  const bare = [...clean.matchAll(/\b\d{1,3}(?:[ .]\d{3})+\b|\b\d{5,7}\b/g)].map((m) => toNumber(m[0]));
+
+  const plausible = [...tagged.map((t) => t.value), ...bare]
+    .filter((v) => v >= Math.max(lastKm, 1000) && v <= lastKm + MAX_ODOMETER_JUMP);
+  const km = plausible.length ? Math.max(...plausible) : null;
+
+  const afterDays = days ? days.index + days[0].length : 0;
+  const service = hasService
+    ? tagged.find((t) => t.index >= afterDays && t.value < MAX_SERVICE_KM && t.value !== km)
+    : null;
+
+  return {
+    km,
+    serviceDays: days ? Number(days[1]) : null,
+    serviceKm: service ? service.value : null,
+  };
+}
+
+const plain = (text) => text.normalize('NFD').replace(/\p{M}/gu, '');
+const MONTHS = ['janvier', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre'];
+const OTHER_DATE_LINE = /circulation|m\.?e\.?c\b|echeance|prochain|naissance|valid/i;
+const OTHER_KM_LINE = /prochain|tous les|garantie|avant|intervalle/i;
+const TOTAL_LABELS = [/net\s*a\s*payer/i, /total\s*t\.?\s*t\.?\s*c/i, /(?:montant|total)\s*a\s*payer/i, /t\.?\s*t\.?\s*c/i];
+const AMOUNT = /\d{1,3}(?:[ .]\d{3})*[.,]\d{2}(?!\d)/g;
+const GARAGE_LINE = /garage|carrosserie|automobiles|norauto|feu vert|speedy|midas|euromaster/i;
+const INVOICE_TITLES = [
+  [/revision|entretien/i, 'Révision'],
+  [/distribution/i, 'Kit de distribution'],
+  [/vidange/i, 'Vidange'],
+  [/plaquette|disque|frein/i, 'Freins'],
+  [/pneu/i, 'Pneus'],
+  [/controle technique/i, 'Contrôle technique'],
+  [/batterie/i, 'Batterie'],
+  [/climatisation/i, 'Climatisation'],
+];
+
+function dateInLine(line, today) {
+  const digits = line.match(/\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})\b/);
+  const words = line.match(new RegExp(`\\b(\\d{1,2})\\s+(${MONTHS.join('|')})\\s+(\\d{4})\\b`, 'i'));
+  let parts = null;
+  if (digits) parts = [Number(digits[1]), Number(digits[2]), digits[3]];
+  else if (words) parts = [Number(words[1]), MONTHS.indexOf(words[2].toLowerCase()) + 1, words[3]];
+  if (!parts) return null;
+  const [day, month, year] = parts;
+  const iso = `${year.length === 2 ? `20${year}` : year}-${pad(month)}-${pad(day)}`;
+  const isReal = !Number.isNaN(fromISO(iso).getTime()) && toISO(fromISO(iso)) === iso;
+  return isReal && iso >= '2000-01-01' && iso <= today ? iso : null;
+}
+
+function invoiceDate(lines, today) {
+  const usable = lines.filter((line) => !OTHER_DATE_LINE.test(line));
+  const labelled = usable.filter((line) => /factur|date/i.test(line));
+  for (const line of [...labelled, ...usable]) {
+    const date = dateInLine(line, today);
+    if (date) return date;
+  }
+  return null;
+}
+
+/** Le montant du total : du libellé le plus sûr au moins sûr, sur sa ligne ou la suivante. */
+function invoiceAmount(lines) {
+  for (const label of TOTAL_LABELS) {
+    for (const [i, line] of lines.entries()) {
+      if (!label.test(line)) continue;
+      const amounts = line.match(AMOUNT) ?? lines[i + 1]?.match(AMOUNT);
+      if (amounts) return Number(amounts[amounts.length - 1].replace(/[ .](?=\d{3})/g, '').replace(',', '.'));
+    }
+  }
+  return null;
+}
+
+function invoiceKm(lines, lastKm) {
+  const isPlausible = (value) => value >= 1000 && value <= lastKm + MAX_ODOMETER_JUMP;
+  const usable = lines.filter((line) => !OTHER_KM_LINE.test(line));
+  const patterns = [
+    /(?:kilometrage|compteur|\bkm)\s*[:.-]?\s*(\d{1,3}(?:[ .]\d{3})+|\d{4,7})/i,
+    new RegExp(`(${NUMBER})\\s*km\\b`, 'i'),
+  ];
+  for (const pattern of patterns) {
+    for (const line of usable) {
+      const match = line.match(pattern);
+      if (match && isPlausible(toNumber(match[1]))) return toNumber(match[1]);
+    }
+  }
+  return null;
+}
+
+/**
+ * Extrait d'un texte lu sur une facture ce qui remplit le formulaire. Chaque valeur vaut null
+ * si elle n'est pas trouvée : mieux vaut un champ vide qu'une valeur douteuse.
+ */
+export function parseInvoice(text, lastKm, today) {
+  const lines = plain(text).replace(/ /g, ' ').split('\n').map((line) => line.trim()).filter(Boolean);
+  const all = lines.join('\n');
+  return {
+    title: INVOICE_TITLES.find(([pattern]) => pattern.test(all))?.[1] ?? null,
+    date: invoiceDate(lines, today),
+    amount: invoiceAmount(lines),
+    km: invoiceKm(lines, lastKm),
+    garage: lines.slice(0, 8).find((line) => GARAGE_LINE.test(line) && line.length <= 40) ?? null,
+  };
+}
+
+/** Le coût saisi, sinon le prix de référence, sinon null. */
+export function priceOf(op) {
+  if (op.costMin != null || op.costMax != null) {
+    return { min: op.costMin ?? op.costMax, max: op.costMax ?? op.costMin, reference: false };
+  }
+  const ref = REFERENCE_PRICES[op.id];
+  return ref ? { min: ref.min, max: ref.max, reference: true } : null;
+}
+
 export function forecast(carnet, today, months = 12) {
   const horizon = addMonths(today, months);
   const items = sortedOperations(carnet, today).filter((x) => x.due.date && x.due.date <= horizon);
-  const priced = items.filter((x) => x.op.costMin != null || x.op.costMax != null);
+  const prices = items.map((x) => priceOf(x.op)).filter(Boolean);
   return {
     items,
-    min: priced.reduce((sum, x) => sum + (x.op.costMin ?? x.op.costMax), 0),
-    max: priced.reduce((sum, x) => sum + (x.op.costMax ?? x.op.costMin), 0),
-    unpriced: items.length - priced.length,
+    min: prices.reduce((sum, p) => sum + p.min, 0),
+    max: prices.reduce((sum, p) => sum + p.max, 0),
+    unpriced: items.length - prices.length,
   };
+}
+
+/**
+ * Les dépenses à venir, année par année jusqu'à lastYear. Une opération en retard compte à
+ * aujourd'hui, puis chaque opération se répète à son rythme, au kilométrage moyen constaté.
+ */
+export function spendPlan(carnet, today, lastYear) {
+  const { perDay } = kmStats(carnet, today);
+  const years = new Map();
+  const undated = { count: 0, min: 0, max: 0 };
+  let unpriced = 0;
+
+  for (const { op, due } of sortedOperations(carnet, today)) {
+    const price = priceOf(op);
+    if (!due.date) {
+      if (due.status === 'inconnu' && price?.max > 0) {
+        undated.count += 1;
+        undated.min += price.min;
+        undated.max += price.max;
+      }
+      continue;
+    }
+    if (!price) { unpriced += 1; continue; }
+    if (price.max === 0) continue;
+
+    const stepKm = op.intervalKm ?? REFERENCE_PRICES[op.id]?.planKm ?? null;
+    let date = due.date < today ? today : due.date;
+    while (date && Number(date.slice(0, 4)) <= lastYear) {
+      const year = date.slice(0, 4);
+      if (!years.has(year)) years.set(year, { year, items: [], min: 0, max: 0 });
+      const entry = years.get(year);
+      entry.items.push({ op, date, min: price.min, max: price.max });
+      entry.min += price.min;
+      entry.max += price.max;
+
+      const byMonths = op.intervalMonths ? addMonths(date, op.intervalMonths) : null;
+      const byKm = stepKm && perDay > 0 ? addDays(date, Math.ceil(stepKm / perDay)) : null;
+      date = [byMonths, byKm].filter(Boolean).sort()[0] ?? null;
+    }
+  }
+  return { years: [...years.values()], unpriced, undated };
 }
 
 export function spentByYear(carnet) {
@@ -179,6 +413,47 @@ function foldLine(line) {
 
 function icsLocal(date, time) {
   return date.replace(/-/g, '') + 'T' + time.replace(':', '') + '00';
+}
+
+/**
+ * Un calendrier des échéances à venir, avec deux rappels à 9 h : 14 jours avant et la veille.
+ * Le DTSTART sans heure vaut minuit, d'où les décalages de 15 h. L'UID stable identifie
+ * l'échéance d'un export à l'autre. Renvoie null s'il n'y a rien à venir, sauf avec allowEmpty :
+ * un calendrier abonné doit rester publié, même vide, pour que ses anciens événements disparaissent.
+ */
+export function buildDueIcs(items, today, { now = new Date(), allowEmpty = false } = {}) {
+  const upcoming = items.filter(({ due }) => due.date && due.date >= today && due.status !== 'fait');
+  if (!upcoming.length && !allowEmpty) return null;
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const day = (date) => date.replace(/-/g, '');
+  const alarm = (trigger, text) => ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsText(text)}`, `TRIGGER:${trigger}`, 'END:VALARM'];
+  const lines = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Carnet entretien//FR', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    'X-WR-CALNAME:Entretien voiture', 'REFRESH-INTERVAL;VALUE=DURATION:PT6H', 'X-PUBLISHED-TTL:PT6H',
+  ];
+  for (const { op, due } of upcoming) {
+    lines.push(
+      'BEGIN:VEVENT',
+      `UID:echeance-${op.id}@carnet-entretien`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${day(due.date)}`,
+      `DTEND;VALUE=DATE:${day(addDays(due.date, 1))}`,
+      `SUMMARY:${icsText(`Entretien : ${op.title}`)}`,
+      `DESCRIPTION:${icsText(due.estimated ? `Date estimée d'après ton kilométrage moyen (échéance à ${due.km} km).` : 'Échéance du carnet d’entretien.')}`,
+      ...alarm('-P13DT15H', `${op.title} dans 14 jours`),
+      ...alarm('-PT15H', `${op.title} demain`),
+      'END:VEVENT',
+    );
+  }
+  lines.push('END:VCALENDAR');
+  return lines.map(foldLine).join('\r\n') + '\r\n';
+}
+
+/** L'adresse d'abonnement d'un lien Dropbox : téléchargement direct, protocole des calendriers. */
+export function calendarFeedUrl(sharedLink) {
+  const url = new URL(sharedLink);
+  url.searchParams.set('dl', '1');
+  return url.href.replace(/^https:/, 'webcal:');
 }
 
 export function buildIcs(appt, now = new Date()) {

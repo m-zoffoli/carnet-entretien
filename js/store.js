@@ -69,7 +69,13 @@ const base64Url = (bytes) =>
 export const dropboxConfigured = () => Boolean(DROPBOX_APP_KEY);
 export const isConnected = () => Boolean(read('carnet.dbx.refresh'));
 
-export async function beginDropboxAuth() {
+// Seul l'abonnement au calendrier a besoin de créer un lien : ce droit reste demandé à part,
+// pour qu'une connexion ordinaire fonctionne sans réglage supplémentaire chez Dropbox.
+export const CALENDAR_SCOPE = 'sharing.read sharing.write';
+
+export class MissingScopeError extends Error {}
+
+export async function beginDropboxAuth(extraScope = '') {
   const verifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
   const state = base64Url(crypto.getRandomValues(new Uint8Array(16)));
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
@@ -82,7 +88,7 @@ export async function beginDropboxAuth() {
     token_access_type: 'offline',
     redirect_uri: redirectUri(),
     state,
-    scope: 'files.metadata.read files.content.read files.content.write',
+    scope: ['files.metadata.read files.content.read files.content.write', extraScope].filter(Boolean).join(' '),
   });
   location.assign('https://www.dropbox.com/oauth2/authorize?' + params);
 }
@@ -103,6 +109,9 @@ export async function completeDropboxAuth() {
   const saved = JSON.parse(read('carnet.pkce') || 'null');
   write('carnet.pkce', null);
   history.replaceState(null, '', location.pathname);
+  if (params.get('error') === 'invalid_scope') {
+    throw new Error('Dropbox refuse cette autorisation : coche sharing.read et sharing.write dans les permissions de ton app Dropbox, puis réessaie.');
+  }
   if (params.has('error')) throw new Error('Connexion Dropbox annulée.');
   if (!saved || saved.state !== params.get('state')) throw new Error('Réponse Dropbox invalide, recommence la connexion.');
   const token = await tokenRequest({
@@ -168,12 +177,37 @@ export class DropboxStore {
     }));
   }
 
-  rpc(endpoint, arg) {
-    return this.call('https://api.dropboxapi.com/2/files/' + endpoint, (token) => ({
+  api(url, arg) {
+    return this.call(url, (token) => ({
       method: 'POST',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
       body: JSON.stringify(arg),
     }));
+  }
+
+  rpc(endpoint, arg) {
+    return this.api('https://api.dropboxapi.com/2/files/' + endpoint, arg);
+  }
+
+  /** Le lien public d'un fichier du dossier, créé au besoin. */
+  async sharedLink(name) {
+    const path = `${this.folder}/${name}`;
+    const sharing = 'https://api.dropboxapi.com/2/sharing/';
+    const res = await this.api(`${sharing}create_shared_link_with_settings`, { path, settings: { audience: 'public', access: 'viewer' } });
+    if (res.ok) return (await res.json()).url;
+
+    const body = await res.text();
+    if (res.status === 401 && body.includes('missing_scope')) throw new MissingScopeError();
+    if (res.status === 409 && body.includes('shared_link_already_exists')) {
+      const known = JSON.parse(body).error?.shared_link_already_exists?.metadata?.url;
+      if (known) return known;
+      const list = await this.api(`${sharing}list_shared_links`, { path, direct_only: true });
+      if (list.ok) {
+        const [link] = (await list.json()).links;
+        if (link) return link.url;
+      }
+    }
+    throw new Error('Création du lien Dropbox impossible.');
   }
 
   async revOf(path) {
