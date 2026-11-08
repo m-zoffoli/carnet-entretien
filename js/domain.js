@@ -125,7 +125,7 @@ export function nextDue(op, carnet, today) {
  * l'échéance, pour un geste partiel (un plein d'AdBlue ne vaut pas contrôle du filtre à particules).
  */
 export function applyHistory(carnet, history) {
-  const summary = { readings: 0, entries: 0 };
+  const summary = { readings: 0, entries: 0, invoices: 0 };
   if (history.vehicle) Object.assign(carnet.vehicle, history.vehicle);
 
   for (const { date, km } of history.readings ?? []) {
@@ -157,6 +157,24 @@ export function applyHistory(carnet, history) {
       op.dueKm = spec.due.km ?? null;
     }
     if (spec.note && !op.note) op.note = spec.note;
+  }
+
+  // Une facture déjà saisie (même date, même montant) reçoit seulement ce qui a été lu.
+  for (const inv of history.invoices ?? []) {
+    const amount = inv.amount ?? null;
+    const known = carnet.invoices.find((x) => x.date === inv.date && (x.amount ?? null) === amount);
+    if (known) {
+      if (!known.read && inv.read) {
+        known.read = inv.read;
+        summary.invoices += 1;
+      }
+      continue;
+    }
+    carnet.invoices.push({
+      id: `hist-fac-${inv.date}`, title: inv.title, date: inv.date, amount, km: inv.km ?? null,
+      garage: inv.garage || '', notes: inv.notes || '', ops: inv.ops || [], file: null, fileType: null, read: inv.read,
+    });
+    summary.invoices += 1;
   }
   return summary;
 }
@@ -218,7 +236,7 @@ export function buildInterventionsCsv(carnet) {
   const rows = [];
   for (const op of carnet.operations) {
     for (const entry of op.history || []) {
-      if (String(entry.note).startsWith('Facture') && fromInvoice(entry.date, op.id)) continue;
+      if (fromInvoice(entry.date, op.id)) continue;
       rows.push([entry.date, entry.km, op.title, entry.note, '', '', 'carnet']);
     }
   }
