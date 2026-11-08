@@ -72,7 +72,7 @@ button, input, select, textarea { font-family: inherit; }
 #app {
   max-width: 640px;
   margin: 0 auto;
-  padding: 0 0 calc(92px + env(safe-area-inset-bottom)); /* la place du bouton rond */
+  padding: 0 0 72px; /* la place du bouton rond */
 }
 @media (min-width: 680px) {
   #app { border-inline: var(--rule); min-height: 100dvh; }
@@ -138,7 +138,7 @@ strong { font-weight: 700; }
 /* --- Jauge de vie de la voiture ------------------------------------------- */
 
 /* --at est la position sur la jauge, posée par render(). */
-.gauge { padding: 16px var(--gut) 0; }
+.gauge { padding: 16px var(--gut) 0; cursor: pointer; }
 .gauge-bar { position: relative; height: 10px; margin-top: 8px; background: var(--faint-track); }
 .gauge-fill { position: absolute; left: 0; top: 0; bottom: 0; width: var(--at); background: var(--ink); }
 /* Le bouton est la zone tactile, 44 px de haut ; le trait visible est dessiné dedans. */
@@ -419,7 +419,7 @@ body:has(#tabs:not([hidden])) #app > :first-child { padding-left: 66px; }
 /* Le bouton d'ajout d'alerte reste accessible partout, en bas au centre. */
 .alert-fab {
   position: fixed;
-  bottom: calc(env(safe-area-inset-bottom) + 16px);
+  bottom: 6px; /* volontairement dans la zone de la barre d'accueil de l'iPhone */
   left: 50%;
   z-index: 5;
   width: 60px;
@@ -564,7 +564,7 @@ h4 { font-size: 13px; font-weight: 700; margin: 24px 0 6px; padding-top: 10px; b
   position: fixed;
   left: 16px;
   right: 16px;
-  bottom: calc(88px + env(safe-area-inset-bottom));
+  bottom: 76px;
   max-width: 480px;
   margin: 0 auto;
   padding: 14px 16px;
