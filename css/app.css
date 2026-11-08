@@ -183,6 +183,7 @@ dialog {
 }
 dialog::backdrop { background: rgb(0 0 0 / .5); }
 .close { position: absolute; top: 8px; right: 8px; border: 0; background: none; font-size: 24px; font-weight: 400; }
+.close:focus { outline: none; }
 
 label { display: block; margin: 12px 0; font-size: 14px; font-weight: 600; }
 label input, label select, label textarea {
@@ -238,6 +239,13 @@ legend { font-size: 14px; font-weight: 600; padding: 0; }
 .mark.due { background: none; border: 2px solid var(--warn); }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 8px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+h4 { font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 22px 0 6px; font-weight: 700; }
+.guide { border-top: 1px solid var(--line); padding: 10px 0; }
+.guide summary { font-weight: 700; min-height: 28px; cursor: pointer; }
+.guide .badge { margin-top: 6px; }
+.guide ul { margin: 8px 0; padding-left: 20px; }
+.guide li { margin: 6px 0; }
 
 .preview { display: block; max-width: 100%; border-radius: 8px; margin: 10px 0; }
 .frame { width: 100%; height: 60vh; border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; }

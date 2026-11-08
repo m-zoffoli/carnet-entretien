@@ -1,7 +1,8 @@
 import {
   addDays, applyDone, buildIcs, createCarnet, diffDays, forecast, fromISO, kmStats, nextDue,
-  sortedOperations, spentByYear, toISO, uid,
+  sortedOperations, spentByYear, toISO, uid, upgradeCarnet,
 } from './domain.js';
+import { GUIDE } from './guide.js';
 import {
   ConflictError, DropboxStore, LocalStore, beginDropboxAuth, completeDropboxAuth, disconnectDropbox,
   dropboxConfigured, getFolder, getMode, isConnected, setFolder, setMode,
@@ -29,7 +30,10 @@ const fmtEur = (n) => Number(n).toLocaleString('fr-FR', { style: 'currency', cur
 const num = (value) => (value === '' || value == null ? null : Number(value));
 
 function dueText(due) {
-  if (due.status === 'inconnu') return due.oneOff ? 'Vérification à faire' : 'Intervalle à confirmer';
+  if (due.status === 'inconnu') {
+    if (due.needsLast) return 'Dernière date à renseigner';
+    return due.oneOff ? 'Vérification à faire' : 'Intervalle à confirmer';
+  }
   if (due.status === 'fait') return 'Fait';
   const prefix = due.estimated ? 'Vers ' : '';
   if (due.km != null && due.estimated) return `${prefix}${fmtDate(due.date)} (${fmtKm(due.km)})`;
@@ -43,6 +47,7 @@ const LEVEL = {
   officiel: 'Source officielle',
   tiers: 'Source non officielle',
   'a-confirmer': 'À confirmer',
+  conseil: 'Pour t’aider',
 };
 
 const statusBadge = (due) =>
@@ -333,6 +338,23 @@ function render() {
 
 // --- Fenêtres ----------------------------------------------------------------
 
+function guideHtml(op) {
+  const guide = GUIDE[op.id];
+  if (!guide) return '';
+  const perYear = kmStats(S.carnet, today()).perYear;
+  const rhythm = guide.rhythmKm && perYear
+    ? `<p class="small">À ton rythme d’environ ${fmtKm(perYear)} par an, ${fmtKm(guide.rhythmKm)} représentent environ ${Math.round((guide.rhythmKm / perYear) * 12)} mois.</p>`
+    : '';
+  const sections = guide.sections.map((s, index) => `
+    <details class="guide" ${index === 0 ? 'open' : ''}>
+      <summary>${h(s.title)}</summary>
+      <span class="badge">${h(LEVEL[s.level])}</span>
+      <ul>${s.items.map((item) => `<li>${h(item)}</li>`).join('')}</ul>
+      ${s.source ? `<p class="small"><a href="${h(s.source.url)}" target="_blank" rel="noopener noreferrer">${h(s.source.label)}</a></p>` : ''}
+    </details>`).join('');
+  return `<h4>Pour en savoir plus</h4>${rhythm}${sections}`;
+}
+
 function opModal(id) {
   const op = S.carnet.operations.find((o) => o.id === id);
   const due = nextDue(op, S.carnet, today());
@@ -351,7 +373,8 @@ function opModal(id) {
       <button class="primary" data-action="new-appt" data-date="${today()}" data-op="${h(op.id)}">Prendre rendez-vous</button>
       <button data-action="done" data-id="${h(op.id)}">Marquer comme fait</button>
       <button data-action="edit-op" data-id="${h(op.id)}">Modifier</button>
-    </div>`);
+    </div>
+    ${guideHtml(op)}`);
 }
 
 function doneModal(id) {
@@ -516,6 +539,7 @@ async function commit(mutate) {
 
 async function reload() {
   const { data, rev } = await S.store.load();
+  if (data) upgradeCarnet(data);
   S.carnet = data;
   S.rev = rev;
   if (data) render();
