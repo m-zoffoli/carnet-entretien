@@ -154,12 +154,23 @@ const LIFE_KM = 300000;
 const roundKm = (n) => Math.ceil(n / 100) * 100;
 const MARK_REACH = 6.5; // portée tactile d'un repère de chaque côté, en % de la jauge
 
-/** La vie de la voiture en une jauge. items : les entretiens au kilométrage, triés. */
-function kmGauge(items, km) {
-  const end = Math.max(LIFE_KM, km, ...items.map((x) => x.due.km));
+/**
+ * La vie de la voiture en une jauge. Une échéance atteinte d'abord par la date est placée
+ * approximativement, au kilométrage moyen ; un retard se retrouve donc derrière le kilométrage actuel.
+ */
+function kmGauge(ops, { km, perDay }) {
+  const items = ops
+    .filter(({ due }) => due.date || due.km != null)
+    .map((item) => {
+      const { due } = item;
+      const byDate = due.date && !due.estimated;
+      return { ...item, pos: Math.max(byDate ? km + due.daysLeft * perDay : due.km, 0) };
+    })
+    .sort((a, b) => a.pos - b.pos);
+  const end = Math.max(LIFE_KM, km, ...items.map((x) => x.pos));
   const at = (n) => Math.round((n / end) * 10000) / 100;
-  const next = items.find((x) => x.due.km > km);
-  const positions = items.map((x) => at(x.due.km));
+  const next = items.find((x) => x.pos > km);
+  const positions = items.map((x) => at(x.pos));
 
   // Chaque repère touche jusqu'à mi-chemin de ses voisins : deux repères proches restent sélectionnables.
   const marks = items.map(({ op, due }, i) => {
@@ -167,7 +178,7 @@ function kmGauge(items, km) {
     const from = Math.max(i ? (positions[i - 1] + x) / 2 : 0, x - MARK_REACH, 0);
     const to = Math.min(i < items.length - 1 ? (x + positions[i + 1]) / 2 : 100, x + MARK_REACH, 100);
     const line = to > from ? ((x - from) / (to - from)) * 100 : 50;
-    return `<button class="gauge-mark ${due.status}" data-action="op" data-id="${h(op.id)}" data-at="${from}" data-w="${to - from}" data-line="${line}" aria-label="${h(op.title)}, à ${fmtKm(due.km)}"></button>`;
+    return `<button class="gauge-mark ${due.status}" data-action="op" data-id="${h(op.id)}" data-at="${from}" data-w="${to - from}" data-line="${line}" aria-label="${h(op.title)}, ${h(dueText(due))}"></button>`;
   });
 
   return `
@@ -176,8 +187,7 @@ function kmGauge(items, km) {
         <span class="gauge-fill" data-at="${at(km)}"></span>
         ${marks.join('')}
       </div>
-      <div class="gauge-ends"><span>0</span><span>${fmtNum(end)}</span></div>
-      <p class="gauge-next">${next ? `Prochain repère : ${h(next.op.title)} à ${fmtKm(next.due.km)}` : 'Aucun repère à venir'}</p>
+      <p class="gauge-next">${next ? `Prochain repère : ${h(next.op.title)}, ${h(dueText(next.due))}` : 'Aucun repère à venir'}</p>
     </div>`;
 }
 
@@ -189,11 +199,9 @@ function viewHome() {
   const late = ops.filter((x) => x.due.status === 'retard');
   const soon = ops.filter((x) => x.due.status === 'bientot');
   const next = ops.filter((x) => x.due.status === 'ok').slice(0, 3);
-  const kmItems = ops.filter((x) => x.due.km != null).sort((a, b) => a.due.km - b.due.km);
   const appts = upcomingAppts(c).slice(0, 3);
   const f = forecast(c, t);
   const spent = spentByYear(c).find(([y]) => y === t.slice(0, 4))?.[1] || 0;
-  const name = [c.vehicle.marque, c.vehicle.modele].filter(Boolean).join(' ') || 'Ma voiture';
 
   // Les retards d'abord, puis les urgences, les rendez-vous et les prochains entretiens.
   const cards = [
@@ -205,10 +213,6 @@ function viewHome() {
   ];
 
   return `
-    <div class="topbar">
-      ${pill(name)}
-      <button class="icon emoji" data-action="go" data-view="vehicle" aria-label="Véhicule et réglages"><span aria-hidden="true">🚗</span></button>
-    </div>
     <div class="hero">
       <p class="hero-label">Kilométrage</p>
       <div class="hero-figure">
@@ -222,7 +226,7 @@ function viewHome() {
       ${stats.monthsEstimated ? `<p class="hero-label">Estimé depuis ${stats.monthsEstimated} mois : +${fmtKm(stats.km - stats.lastKm)}</p>` : ''}
       ${stats.perYear ? `<p class="hero-label">Environ ${fmtKm(stats.perMonth)} par mois</p>` : ''}
     </div>
-    ${kmGauge(kmItems, stats.km)}
+    ${kmGauge(ops, stats)}
     <button class="agenda-band" data-action="go" data-view="calendar">Agenda</button>
     <div class="stack">
       ${cards.join('')}
@@ -411,7 +415,6 @@ function viewVehicle() {
   return `
     <div class="topbar">
       <h1>Véhicule</h1>
-      <button class="icon" data-action="go" data-view="home" aria-label="Retour">×</button>
     </div>
     <form class="card" data-form="vehicle">
       <div class="two">
@@ -484,13 +487,14 @@ function viewOnboarding() {
 }
 
 const VIEWS = { home: viewHome, calendar: viewCalendar, maintenance: viewMaintenance, invoices: viewInvoices, budget: viewBudget, vehicle: viewVehicle };
-const TABS = [['home', 'Accueil'], ['maintenance', 'Entretien'], ['invoices', 'Factures'], ['budget', 'Budget']];
+const TABS = [['home', 'Accueil'], ['maintenance', 'Entretiens à venir'], ['invoices', 'Factures'], ['budget', 'Budget']];
+const ALERT_TAB = '<button class="tab-alert" data-action="menu-alert">Message d’alerte</button>';
 const BURGER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
 const tabButton = ([view, label]) => `<button data-action="go" data-view="${view}" ${S.view === view ? 'aria-current="page"' : ''}>${label}</button>`;
 
 function render() {
   if (!S.carnet) return;
-  root.innerHTML = VIEWS[S.view]();
+  root.innerHTML = appHeader() + VIEWS[S.view]();
   // La politique de sécurité interdit les attributs style : les positions passent par le CSSOM.
   root.querySelectorAll('[data-at]').forEach((el) => el.style.setProperty('--at', `${el.dataset.at}%`));
   root.querySelectorAll('[data-w]').forEach((el) => {
@@ -503,11 +507,21 @@ function render() {
   renderMenu();
 }
 
+/** L'en-tête de l'accueil, au-dessus de chaque page : le toucher ramène à l'accueil. */
+function appHeader() {
+  const { marque, modele } = S.carnet.vehicle;
+  const name = [marque, modele].filter(Boolean).join(' ') || 'Ma voiture';
+  return `
+    <div class="topbar app-header" data-action="go" data-view="home">
+      ${pill(name)}
+      <button class="icon emoji" data-action="go" data-view="vehicle" aria-label="Véhicule et réglages"><span aria-hidden="true">🚗</span></button>
+    </div>`;
+}
+
 function renderMenu() {
   tabs.innerHTML = `
     <button class="burger" data-action="menu" aria-label="Menu" aria-expanded="${Boolean(S.menuOpen)}">${BURGER_ICON}</button>
-    ${S.menuOpen ? `<div class="menu">${TABS.map(tabButton).join('')}</div>` : ''}
-    <button class="alert-fab" data-action="alert" aria-label="Ajouter un message d’alerte"><span aria-hidden="true">+</span></button>`;
+    ${S.menuOpen ? `<div class="menu">${[...TABS.slice(0, 2).map(tabButton), ALERT_TAB, ...TABS.slice(2).map(tabButton)].join('')}</div>` : ''}`;
 }
 
 function closeMenu() {
@@ -1099,6 +1113,7 @@ const ACTIONS = {
     }
   },
   menu: () => { S.menuOpen = !S.menuOpen; renderMenu(); },
+  'menu-alert': () => { closeMenu(); alertChoiceModal(); },
   'ask-claude': () => navigator.clipboard?.writeText(claudePrompt).catch(() => {}),
   'alert-form': () => alertFormModal(),
   'budget-year': ({ year }) => { S.budgetYear = year; render(); },

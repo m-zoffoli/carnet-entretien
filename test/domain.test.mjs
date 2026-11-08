@@ -209,6 +209,25 @@ test('une réponse sans bloc de mise à jour est refusée', () => {
   assert.throws(() => parseClaudeUpdate('{"version":2,"operations":[]}', carnet()), /Aucun bloc/);
 });
 
+test('les rappels constructeur reviennent tous les 6 mois', () => {
+  const c = carnet();
+  assert.equal(nextDue(op(c, 'rappels'), c, today).date, today);
+  applyDone(op(c, 'rappels'), { date: today });
+  assert.equal(nextDue(op(c, 'rappels'), c, today).date, '2027-05-08');
+});
+
+test('un ancien carnet passe aux rappels réguliers, sans perdre une vérification déjà faite', () => {
+  const ancien = (lastDoneDate) => {
+    const c = carnet();
+    Object.assign(op(c, 'rappels'), { oneOff: true, intervalMonths: null, dueDate: null, lastDoneDate });
+    c.templateVersion = 2;
+    upgradeCarnet(c, today);
+    return nextDue(op(c, 'rappels'), c, today).date;
+  };
+  assert.equal(ancien(null), today);
+  assert.equal(ancien('2026-10-01'), '2027-04-01');
+});
+
 test('le service suit la date affichée par le tableau de bord', () => {
   const due = nextDue(op(carnet(), 'service'), carnet(), today);
   assert.equal(due.date, '2026-11-24');

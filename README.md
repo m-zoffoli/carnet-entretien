@@ -23,7 +23,7 @@ python3 -m http.server 4173
 
 ## Police
 
-L'interface est composée en Apfel Grotezk (Collletttivo, licence SIL OFL 1.1), hébergée dans `fonts/` : Regular pour les chiffres et les lignes, Fett pour les petits libellés. Les titres sont en Ronzino (Collletttivo, licence SIL OFL 1.1), hébergée au même endroit.
+Le texte est composé en Diamond Grotesk, hébergée dans `fonts/`. Les gros chiffres restent en Apfel Grotezk (Collletttivo, licence SIL OFL 1.1).
 
 ## Lecture des photos
 

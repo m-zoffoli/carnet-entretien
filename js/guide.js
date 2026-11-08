@@ -145,6 +145,14 @@ export const GUIDE = {
         ],
         source: S.rappel,
       },
+      {
+        level: 'conseil',
+        title: 'Pourquoi tous les 6 mois',
+        items: [
+          'De nouvelles campagnes peuvent être ouvertes à tout moment, et un courrier peut ne pas arriver sur une voiture achetée d’occasion.',
+          'Ce rythme est un choix de prudence, pas une consigne Volkswagen. Profite aussi de chaque passage au garage pour poser la question.',
+        ],
+      },
     ],
   },
 
