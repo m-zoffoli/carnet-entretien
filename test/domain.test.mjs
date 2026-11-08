@@ -119,8 +119,8 @@ test('la question pour Claude donne le contexte sans identifiant personnel', () 
   c.vehicle.immatriculation = 'AB-123-CD';
   c.vehicle.vin = 'VIN12345678901234';
   applyHistory(c, HISTORY);
-  const prompt = buildAlertPrompt(c, { title: 'Service d’entretien', days: 16, km: 12900 }, today);
-  assert.match(prompt, /« Service d’entretien », dans 16 jours ou 12900 km/);
+  const prompt = buildAlertPrompt(c, { title: 'Service d’entretien', days: 16, km: 12500 }, today);
+  assert.match(prompt, /« Service d’entretien », dans 16 jours ou 12500 km/);
   assert.match(prompt, /18\/06\/2024, 85000 km : Liquide de frein \(Vidange\)/);
   assert.doesNotMatch(prompt, /AB-123-CD|VIN1234/);
 });
@@ -288,16 +288,16 @@ test('la projection met à part les opérations sans date', () => {
 });
 
 test('la photo du message de service donne les jours et les kilomètres restants', () => {
-  assert.deepEqual(parseDashboard('Service entretien\ndans 16 jours ou 12900 km', 142457),
-    { km: null, serviceDays: 16, serviceKm: 12900 });
-  assert.deepEqual(parseDashboard('Service dans 16 jours\nou 12 900 km', 142457),
-    { km: null, serviceDays: 16, serviceKm: 12900 });
+  assert.deepEqual(parseDashboard('Service entretien\ndans 16 jours ou 12500 km', 143210),
+    { km: null, serviceDays: 16, serviceKm: 12500 });
+  assert.deepEqual(parseDashboard('Service dans 16 jours\nou 12 500 km', 143210),
+    { km: null, serviceDays: 16, serviceKm: 12500 });
 });
 
 test('la photo du compteur donne le kilométrage, sans confondre les autres chiffres', () => {
-  assert.equal(parseDashboard('142 457 km\n12.5 °C 850 km', 140000).km, 142457);
+  assert.equal(parseDashboard('143 210 km\n12.5 °C 850 km', 140000).km, 143210);
   assert.equal(parseDashboard('14300 km 142458', 140000).km, 142458);
-  assert.equal(parseDashboard('O 142457', 140000).km, 142457);
+  assert.equal(parseDashboard('O 143210', 140000).km, 143210);
   assert.equal(parseDashboard('999 999 km', 140000).km, null, 'saut impossible depuis le dernier relevé');
 });
 
@@ -311,20 +311,20 @@ test('une facture donne son objet, sa date, son total, son kilométrage et son g
 12 rue des Lilas
 Facture n° 2026-118 du 14/10/2026
 Véhicule : VW Touran  Mise en circulation 27/07/2022
-Kilométrage : 142 457
+Kilométrage : 143 210
 Révision complète       180,00
 Filtre à huile           24,50
 Total HT                340,40
 TVA 20 %                 68,08
 Total TTC               408,48 €
 Prochaine révision à 172 000 km`;
-  assert.deepEqual(parseInvoice(text, 142457, today), {
-    title: 'Révision', date: '2026-10-14', amount: 408.48, km: 142457, garage: 'GARAGE DU CENTRE',
+  assert.deepEqual(parseInvoice(text, 143210, today), {
+    title: 'Révision', date: '2026-10-14', amount: 408.48, km: 143210, garage: 'GARAGE DU CENTRE',
   });
 });
 
 test('le kilométrage d’une facture peut être séparé de son libellé par un mot', () => {
-  assert.equal(parseInvoice('Dernier kilométrage constaté : 139509', 142457, today).km, 139509);
+  assert.equal(parseInvoice('Dernier kilométrage constaté : 131313', 143210, today).km, 131313);
 });
 
 test('le montant vient du net à payer, y compris sur la ligne suivante', () => {
@@ -338,7 +338,7 @@ test('une date impossible ou future n’est pas retenue', () => {
 });
 
 test('une facture illisible laisse tous les champs vides', () => {
-  assert.deepEqual(parseInvoice('xx yy', 142457, today), { title: null, date: null, amount: null, km: null, garage: null });
+  assert.deepEqual(parseInvoice('xx yy', 143210, today), { title: null, date: null, amount: null, km: null, garage: null });
 });
 
 test('les dépenses sont totalisées par année', () => {
