@@ -117,19 +117,15 @@ function opPills(due) {
   return out.join('');
 }
 
-// num : le numéro de l'échéance sur la timeline, seulement sur l'accueil.
-const numAnchor = (op, num) => (num ? `id="op-${h(op.id)}"` : '');
-const numBadge = (num) => (num ? `<span class="num">${num}</span>` : '');
-
-const opRow = ({ op, due, num }) => `
-  <button ${numAnchor(op, num)} class="line ${due.status === 'fait' ? 'is-done' : ''}" data-action="op" data-id="${h(op.id)}">
-    <span class="line-head"><span class="line-title">${numBadge(num)}${h(op.title)}</span>${ARROW}</span>
+const opRow = ({ op, due }) => `
+  <button class="line ${due.status === 'fait' ? 'is-done' : ''}" data-action="op" data-id="${h(op.id)}">
+    <span class="line-head"><span class="line-title">${h(op.title)}</span>${ARROW}</span>
     <span class="pills">${opPills(due)}</span>
   </button>`;
 
-const opBlock = ({ op, due, num }) => `
-  <button ${numAnchor(op, num)} class="block ${due.status}" data-action="op" data-id="${h(op.id)}">
-    <span class="block-head"><span>${numBadge(num)}${h(op.title)}</span>${due.status === 'retard' ? pill('En retard') : ''}</span>
+const opBlock = ({ op, due }) => `
+  <button class="block ${due.status}" data-action="op" data-id="${h(op.id)}">
+    <span class="block-head"><span>${h(op.title)}</span>${due.status === 'retard' ? pill('En retard') : ''}</span>
     <span class="block-value ${delay(due).length > 5 ? 'long' : ''}">${h(delay(due))}</span>
     <span class="block-sub">${h(dueText(due))}</span>
   </button>`;
@@ -155,103 +151,34 @@ const upcomingAppts = (c) =>
 // Estimation généreuse pour un 2.0 TDI bien entretenu, pas une donnée constructeur.
 const LIFE_KM = 300000;
 
-const SCALE_STEP_KM = 50000;
-const TICK_STEP_KM = 500;
-const TICK_STEP_PX = 6; // doit rester égal au pas des dégradés .tl-past et .tl-future
-const NUM_GAP_PX = 30; // écart minimal entre deux numéros
-const PULSE_EVERY_TICKS = 5;
 const roundKm = (n) => Math.ceil(n / 100) * 100;
-const trackWidth = (end) => (end / TICK_STEP_KM) * TICK_STEP_PX;
+const MARK_REACH = 6.5; // portée tactile d'un repère de chaque côté, en % de la jauge
 
-/** Une règle de tirets sur la durée de vie espérée. items : les entretiens au kilométrage, numérotés et triés. */
-function kmTimeline(items, km) {
+/** La vie de la voiture en une jauge. items : les entretiens au kilométrage, triés. */
+function kmGauge(items, km) {
   const end = Math.max(LIFE_KM, km, ...items.map((x) => x.due.km));
-  const at = (n) => Math.round((Math.max(n, 0) / end) * 100000) / 1000;
-  const numGap = (NUM_GAP_PX / trackWidth(end)) * 100;
+  const at = (n) => Math.round((n / end) * 10000) / 100;
+  const next = items.find((x) => x.due.km > km);
+  const positions = items.map((x) => at(x.due.km));
 
-  const scale = [];
-  for (let n = 0; n <= end; n += SCALE_STEP_KM) scale.push(n);
-
-  // Le dernier tiret passé : les tirets restent ainsi alignés sur leur pas de 500 km.
-  const lastTick = Math.floor(km / TICK_STEP_KM) * TICK_STEP_KM;
-
-  // Deux échéances proches : le second numéro descend d'un rang au lieu de chevaucher le premier.
-  const laneEnds = [];
-  const placed = items.map((item) => {
-    const x = at(item.due.km);
-    let lane = laneEnds.findIndex((last) => x - last >= numGap);
-    if (lane === -1) lane = laneEnds.length;
-    laneEnds[lane] = x;
-    return { ...item, x, lane };
+  // Chaque repère touche jusqu'à mi-chemin de ses voisins : deux repères proches restent sélectionnables.
+  const marks = items.map(({ op, due }, i) => {
+    const x = positions[i];
+    const from = Math.max(i ? (positions[i - 1] + x) / 2 : 0, x - MARK_REACH, 0);
+    const to = Math.min(i < items.length - 1 ? (x + positions[i + 1]) / 2 : 100, x + MARK_REACH, 100);
+    const line = to > from ? ((x - from) / (to - from)) * 100 : 50;
+    return `<button class="gauge-mark ${due.status}" data-action="op" data-id="${h(op.id)}" data-at="${from}" data-w="${to - from}" data-line="${line}" aria-label="${h(op.title)}, à ${fmtKm(due.km)}"></button>`;
   });
 
   return `
-    <div class="tl-wrap" data-km="${km}" data-end="${end}">
-      <div class="tl-scroll">
-        <div class="tl">
-          <div class="tl-scale">${scale.map((n) => `<span data-at="${at(n)}">${fmtNum(n)}</span>`).join('')}</div>
-          <div class="tl-track">
-            <span class="tl-past" data-at="${at(lastTick)}"></span>
-            <span class="tl-future" data-at="${at(lastTick + TICK_STEP_KM)}"></span>
-            ${placed.map(({ due, x }) => `<span class="tl-event ${due.status}" data-at="${x}"></span>`).join('')}
-          </div>
-          <div class="tl-nums" data-lane="${laneEnds.length}">
-            ${placed.map(({ op, num, x, lane }) => `<button data-action="jump" data-id="${h(op.id)}" data-at="${x}" data-lane="${lane}" aria-label="Voir ${h(op.title)}">${num}</button>`).join('')}
-          </div>
-        </div>
+    <div class="gauge">
+      <div class="gauge-bar">
+        <span class="gauge-fill" data-at="${at(km)}"></span>
+        ${marks.join('')}
       </div>
-      <span class="tl-needle" aria-hidden="true"></span>
-      <span class="tl-read" aria-live="off"></span>
-      <span class="tl-current">${fmtKm(roundKm(km))}</span>
+      <div class="gauge-ends"><span>0</span><span>${fmtNum(end)}</span></div>
+      <p class="gauge-next">${next ? `Prochain repère : ${h(next.op.title)} à ${fmtKm(next.due.km)}` : 'Aucun repère à venir'}</p>
     </div>`;
-}
-
-/** Centre la règle sur le kilométrage actuel, puis met à jour les chiffres au défilement. */
-function setupTimeline() {
-  const wrap = root.querySelector('.tl-wrap');
-  if (!wrap) return;
-  const km = Number(wrap.dataset.km);
-  const end = Number(wrap.dataset.end);
-  const width = trackWidth(end);
-  const scroller = wrap.querySelector('.tl-scroll');
-  const read = wrap.querySelector('.tl-read');
-  const current = wrap.querySelector('.tl-current');
-  const kmX = (km / end) * width;
-
-  const needle = wrap.querySelector('.tl-needle');
-  const stillMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let lastPulseStep = null;
-  let pulse = null;
-
-  // Une impulsion du repère tous les PULSE_EVERY_TICKS tirets : des crans visibles au défilement.
-  const pulseOnStep = () => {
-    const step = Math.floor(scroller.scrollLeft / (TICK_STEP_PX * PULSE_EVERY_TICKS));
-    if (lastPulseStep !== null && step !== lastPulseStep && !stillMotion) {
-      pulse?.cancel();
-      pulse = needle.animate([{ transform: 'scaleX(2.5)' }, { transform: 'scaleX(1)' }], { duration: 140, easing: 'ease-out' });
-    }
-    lastPulseStep = step;
-  };
-
-  const update = () => {
-    pulseOnStep();
-    const offset = kmX - scroller.scrollLeft;
-    const onCurrent = Math.abs(offset) < 2;
-    read.classList.toggle('is-current', onCurrent);
-    read.textContent = fmtKm(onCurrent ? roundKm(km) : Math.round((scroller.scrollLeft / width) * end / 100) * 100);
-
-    // Le kilométrage actuel suit la règle, puis reste au bord de l'écran.
-    const half = current.offsetWidth / 2;
-    const center = wrap.clientWidth / 2;
-    const x = Math.min(Math.max(center + offset, half), wrap.clientWidth - half);
-    current.style.setProperty('--x', `${x}px`);
-    current.classList.toggle('is-off', Math.abs(x - center) < half + read.offsetWidth / 2 + 8);
-  };
-
-  wrap.querySelector('.tl').style.width = `${width}px`;
-  scroller.scrollLeft = kmX;
-  scroller.addEventListener('scroll', update, { passive: true });
-  update();
 }
 
 function viewHome() {
@@ -261,10 +188,8 @@ function viewHome() {
   const ops = sortedOperations(c, t);
   const late = ops.filter((x) => x.due.status === 'retard');
   const soon = ops.filter((x) => x.due.status === 'bientot');
-  // Chaque numéro de la timeline doit avoir sa carte : on garde tous les entretiens au kilométrage.
-  const next = ops.filter((x) => x.due.status === 'ok').filter((x, i) => i < 3 || x.due.km != null);
+  const next = ops.filter((x) => x.due.status === 'ok').slice(0, 3);
   const kmItems = ops.filter((x) => x.due.km != null).sort((a, b) => a.due.km - b.due.km);
-  kmItems.forEach((x, i) => { x.num = i + 1; });
   const appts = upcomingAppts(c).slice(0, 3);
   const f = forecast(c, t);
   const spent = spentByYear(c).find(([y]) => y === t.slice(0, 4))?.[1] || 0;
@@ -297,7 +222,7 @@ function viewHome() {
       ${stats.monthsEstimated ? `<p class="hero-label">Estimé depuis ${stats.monthsEstimated} mois : +${fmtKm(stats.km - stats.lastKm)}</p>` : ''}
       ${stats.perYear ? `<p class="hero-label">Environ ${fmtKm(stats.perMonth)} par mois</p>` : ''}
     </div>
-    ${kmTimeline(kmItems, stats.km)}
+    ${kmGauge(kmItems, stats.km)}
     <button class="agenda-band" data-action="go" data-view="calendar">Agenda</button>
     <div class="stack">
       ${cards.join('')}
@@ -557,7 +482,6 @@ function viewOnboarding() {
 
 const VIEWS = { home: viewHome, calendar: viewCalendar, maintenance: viewMaintenance, invoices: viewInvoices, budget: viewBudget, vehicle: viewVehicle };
 const TABS = [['home', 'Accueil'], ['maintenance', 'Entretien'], ['invoices', 'Factures'], ['budget', 'Budget']];
-const ALERT_TAB = '<button class="tab-alert" data-action="menu-alert">Message d’alerte</button>';
 const BURGER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
 const tabButton = ([view, label]) => `<button data-action="go" data-view="${view}" ${S.view === view ? 'aria-current="page"' : ''}>${label}</button>`;
 
@@ -566,19 +490,21 @@ function render() {
   root.innerHTML = VIEWS[S.view]();
   // La politique de sécurité interdit les attributs style : les positions passent par le CSSOM.
   root.querySelectorAll('[data-at]').forEach((el) => el.style.setProperty('--at', `${el.dataset.at}%`));
+  root.querySelectorAll('[data-w]').forEach((el) => {
+    el.style.setProperty('--w', `${el.dataset.w}%`);
+    el.style.setProperty('--line', `${el.dataset.line}%`);
+  });
   root.querySelectorAll('[data-h]').forEach((el) => el.style.setProperty('--h', `${el.dataset.h}%`));
-  root.querySelectorAll('[data-lane]').forEach((el) => el.style.setProperty('--lane', el.dataset.lane));
-  setupTimeline();
   tabs.hidden = false;
   S.menuOpen = false;
   renderMenu();
 }
 
 function renderMenu() {
-  const items = [...TABS.slice(0, 2).map(tabButton), ALERT_TAB, ...TABS.slice(2).map(tabButton)].join('');
   tabs.innerHTML = `
     <button class="burger" data-action="menu" aria-label="Menu" aria-expanded="${Boolean(S.menuOpen)}">${BURGER_ICON}</button>
-    ${S.menuOpen ? `<div class="menu">${items}</div>` : ''}`;
+    ${S.menuOpen ? `<div class="menu">${TABS.map(tabButton).join('')}</div>` : ''}
+    <button class="alert-fab" data-action="alert" aria-label="Ajouter un message d’alerte"><span aria-hidden="true">+</span></button>`;
 }
 
 function closeMenu() {
@@ -1114,11 +1040,9 @@ const ACTIONS = {
   km: kmModal,
   alert: alertChoiceModal,
   menu: () => { S.menuOpen = !S.menuOpen; renderMenu(); },
-  'menu-alert': () => { closeMenu(); alertChoiceModal(); },
   'ask-claude': () => navigator.clipboard?.writeText(claudePrompt).catch(() => {}),
   'alert-form': () => alertFormModal(),
   'budget-year': ({ year }) => { S.budgetYear = year; render(); },
-  jump: ({ id }) => document.getElementById(`op-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
   op: ({ id }) => opModal(id),
   done: ({ id }) => doneModal(id),
   'edit-op': ({ id }) => opFormModal(id),
@@ -1204,7 +1128,7 @@ const ACTIONS = {
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMenu(); });
 
 document.addEventListener('click', async (event) => {
-  if (!event.target.closest('#tabs')) closeMenu();
+  if (!event.target.closest('.burger, .menu')) closeMenu();
   const target = event.target.closest('[data-action]');
   if (!target) return;
   try {
