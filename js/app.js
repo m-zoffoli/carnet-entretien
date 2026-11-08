@@ -764,10 +764,13 @@ function invoiceModal(id) {
     <p><strong>${h(fmtDate(inv.date))}</strong>${inv.amount != null ? ' · ' + fmtEur(inv.amount) : ''}${inv.km != null ? ' · ' + fmtKm(inv.km) : ''}</p>
     ${inv.garage ? `<p>${h(inv.garage)}</p>` : ''}
     ${inv.notes ? `<p class="muted">${h(inv.notes)}</p>` : ''}
+    ${inv.read?.lines?.length ? `<ul class="small">${inv.read.lines.map((line) => `<li>${h(line)}</li>`).join('')}</ul>` : ''}
     ${opTitles.length ? `<p class="small">Opérations : ${h(opTitles.join(', '))}</p>` : ''}
     <div id="file-view" class="muted small">Chargement du document…</div>
     <div class="actions"><button class="danger" data-action="delete-invoice" data-id="${h(inv.id)}">Supprimer</button></div>`);
-  showFile(inv.file, inv.fileType, document.getElementById('file-view'));
+  const view = document.getElementById('file-view');
+  if (inv.file) showFile(inv.file, inv.fileType, view);
+  else view.textContent = 'Document non joint.';
 }
 
 // --- Enregistrement ----------------------------------------------------------
@@ -823,7 +826,7 @@ async function importHistory(file) {
   if (!confirm('Ajouter cet historique au carnet ? Les dates d’entretien et les échéances seront mises à jour.')) return;
   let summary;
   const saved = await commit((c) => { summary = applyHistory(c, history); });
-  if (saved) toast(`Historique ajouté : ${summary.entries} interventions, ${summary.readings} relevés.`);
+  if (saved) toast(`Historique ajouté : ${summary.entries} interventions, ${summary.readings} relevés, ${summary.invoices} factures.`);
 }
 
 async function fillFromPhoto(file, form, parse = parseDashboard) {
@@ -1151,7 +1154,7 @@ const ACTIONS = {
     const inv = S.carnet.invoices.find((x) => x.id === id);
     if (await commit((c) => { c.invoices = c.invoices.filter((x) => x.id !== id); })) {
       closeModal();
-      await S.store.deleteFile(inv.file).catch(() => toast('Le document n’a pas pu être supprimé.'));
+      if (inv.file) await S.store.deleteFile(inv.file).catch(() => toast('Le document n’a pas pu être supprimé.'));
     }
   },
   'reading-photo': ({ id }) => {

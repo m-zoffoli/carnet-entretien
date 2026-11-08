@@ -71,7 +71,7 @@ const HISTORY = {
 
 test('un historique date les opérations et ajoute les relevés', () => {
   const c = carnet();
-  assert.deepEqual(applyHistory(c, HISTORY), { readings: 1, entries: 3 });
+  assert.deepEqual(applyHistory(c, HISTORY), { readings: 1, entries: 3, invoices: 0 });
   assert.equal(c.vehicle.miseEnCirculation, '2022-07-26');
   assert.equal(nextDue(op(c, 'frein'), c, today).date, '2026-06-18');
   assert.equal(nextDue(op(c, 'frein'), c, today).status, 'retard');
@@ -93,10 +93,33 @@ test('un geste partiel reste dans l’historique sans déplacer l’échéance',
   assert.equal(op(c, 'depollution').history.length, 1);
 });
 
+test('des factures importées sont ajoutées une seule fois et complètent une facture déjà saisie', () => {
+  const c = carnet();
+  c.invoices.push({ id: 'x', date: '2026-08-17', amount: 300, title: 'Saisie' });
+  const invoices = {
+    version: 1,
+    invoices: [
+      { title: 'Révision', date: '2023-03-27', km: 28000, ops: ['service'], read: { lines: ['Révision'] } },
+      { title: 'Pneus', date: '2026-08-17', amount: 300, read: { lines: ['2 pneus'] } },
+    ],
+  };
+  assert.equal(applyHistory(c, invoices).invoices, 2);
+  assert.equal(c.invoices.length, 2);
+  assert.equal(c.invoices[0].read.lines[0], '2 pneus');
+  assert.equal(c.invoices[1].file, null);
+  assert.equal(applyHistory(c, invoices).invoices, 0);
+});
+
+test('une intervention documentée par une facture n’apparaît qu’une fois dans le CSV', () => {
+  const c = carnet();
+  applyHistory(c, { version: 1, operations: [{ id: 'frein', done: [{ date: '2024-06-18', km: 85000, note: 'Vidange' }] }], invoices: [{ title: 'Révision', date: '2024-06-18', km: 85000, ops: ['frein'] }] });
+  assert.equal(buildInterventionsCsv(c).split('\n').filter((l) => l.startsWith('2024-06-18')).length, 1);
+});
+
 test('rejouer un historique ne crée aucun doublon', () => {
   const c = carnet();
   applyHistory(c, HISTORY);
-  assert.deepEqual(applyHistory(c, HISTORY), { readings: 0, entries: 0 });
+  assert.deepEqual(applyHistory(c, HISTORY), { readings: 0, entries: 0, invoices: 0 });
   assert.equal(op(c, 'frein').history.length, 1);
 });
 
