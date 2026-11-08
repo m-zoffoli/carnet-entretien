@@ -693,7 +693,8 @@ const SOURCES = {
   },
 };
 
-const TEMPLATE_VERSION = 2;
+const TEMPLATE_VERSION = 3;
+const RECALL_CHECK_MONTHS = 6;
 
 function operation(id, title, description, extra = {}) {
   return {
@@ -728,7 +729,8 @@ function templateOperations(today, serviceDays) {
       source: SOURCES.ct,
     }),
     operation('rappels', 'Vérifier les rappels constructeur', 'Saisis ton numéro de série (case E de la carte grise) sur le site Volkswagen, et demande au garage de contrôler les autres campagnes.', {
-      oneOff: true,
+      intervalMonths: RECALL_CHECK_MONTHS,
+      dueDate: today,
       source: SOURCES.rappel,
     }),
     operation('courroie', 'Kit de distribution et pompe à eau', 'Opération lourde à anticiper dans le budget. L’intervalle affiché vient d’un guide non officiel et doit être confirmé pour ton moteur.', {
@@ -766,7 +768,7 @@ function templateOperations(today, serviceDays) {
 }
 
 /** Met à niveau un carnet créé avec un ancien modèle, sans écraser ce que l'utilisateur a renseigné. */
-export function upgradeCarnet(carnet) {
+export function upgradeCarnet(carnet, today = toISO(new Date())) {
   if ((carnet.templateVersion || 1) >= TEMPLATE_VERSION) return false;
   const template = templateOperations(null, null);
   const find = (id) => carnet.operations.find((o) => o.id === id);
@@ -785,6 +787,14 @@ export function upgradeCarnet(carnet) {
   if (depollution && depollution.intervalKm == null && depollution.dueKm == null) {
     Object.assign(depollution, { intervalKm: 30000, source: model('depollution').source, description: model('depollution').description });
     if (depollution.lastDoneKm == null) depollution.dueKm = 150000;
+  }
+
+  // Les rappels ne sont plus une vérification unique : la première est due maintenant si elle n'a jamais été faite.
+  const rappels = find('rappels');
+  if (rappels && rappels.intervalMonths == null) {
+    rappels.oneOff = false;
+    rappels.intervalMonths = RECALL_CHECK_MONTHS;
+    if (!rappels.lastDoneDate) rappels.dueDate = today;
   }
 
   carnet.templateVersion = TEMPLATE_VERSION;
