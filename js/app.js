@@ -298,7 +298,7 @@ function viewHome() {
       ${stats.perYear ? `<p class="hero-label">Environ ${fmtKm(stats.perMonth)} par mois</p>` : ''}
     </div>
     ${kmTimeline(kmItems, stats.km)}
-    <button class="alert-button" data-action="alert">Message d’alerte <span aria-hidden="true">+</span></button>
+    <button class="agenda-band" data-action="go" data-view="calendar">Agenda</button>
     <div class="stack">
       ${cards.join('')}
       <button class="line" data-action="go" data-view="budget">
@@ -556,7 +556,9 @@ function viewOnboarding() {
 }
 
 const VIEWS = { home: viewHome, calendar: viewCalendar, maintenance: viewMaintenance, invoices: viewInvoices, budget: viewBudget, vehicle: viewVehicle };
-const TABS = [['home', 'Accueil'], ['calendar', 'Agenda'], ['maintenance', 'Entretien'], ['invoices', 'Factures'], ['budget', 'Budget']];
+const TABS = [['home', 'Accueil'], ['maintenance', 'Entretien'], ['invoices', 'Factures'], ['budget', 'Budget']];
+const ALERT_TAB = '<button class="tab-alert" data-action="alert">Message d’alerte</button>';
+const tabButton = ([view, label]) => `<button data-action="go" data-view="${view}" ${S.view === view ? 'aria-current="page"' : ''}>${label}</button>`;
 
 function render() {
   if (!S.carnet) return;
@@ -567,7 +569,7 @@ function render() {
   root.querySelectorAll('[data-lane]').forEach((el) => el.style.setProperty('--lane', el.dataset.lane));
   setupTimeline();
   tabs.hidden = false;
-  tabs.innerHTML = TABS.map(([view, label]) => `<button data-action="go" data-view="${view}" ${S.view === view ? 'aria-current="page"' : ''}>${label}</button>`).join('');
+  tabs.innerHTML = [...TABS.slice(0, 2).map(tabButton), ALERT_TAB, ...TABS.slice(2).map(tabButton)].join('');
 }
 
 // --- Fenêtres ----------------------------------------------------------------
