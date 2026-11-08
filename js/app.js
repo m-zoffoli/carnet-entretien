@@ -1,7 +1,8 @@
 import {
   addDays, applyDone, buildIcs, createCarnet, diffDays, forecast, fromISO, kmStats, nextDue,
-  sortedOperations, spentByYear, toISO, uid,
+  sortedOperations, spentByYear, toISO, uid, upgradeCarnet,
 } from './domain.js';
+import { GUIDE } from './guide.js';
 import {
   ConflictError, DropboxStore, LocalStore, beginDropboxAuth, completeDropboxAuth, disconnectDropbox,
   dropboxConfigured, getFolder, getMode, isConnected, setFolder, setMode,
@@ -24,12 +25,18 @@ const h = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmtDate = (s) => (s ? fromISO(s).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
 const fmtShort = (s) => fromISO(s).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-const fmtKm = (n) => `${Number(n).toLocaleString('fr-FR')} km`;
-const fmtEur = (n) => Number(n).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: Number.isInteger(Number(n)) ? 0 : 2 });
+// Apfel Grotezk n'a pas d'espace fine insécable : on la remplace par une espace insécable.
+const wide = (s) => s.replace(/\u202f/g, '\u00a0');
+const fmtNum = (n) => wide(Number(n).toLocaleString('fr-FR'));
+const fmtKm = (n) => `${fmtNum(n)} km`;
+const fmtEur = (n) => wide(Number(n).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: Number.isInteger(Number(n)) ? 0 : 2 }));
 const num = (value) => (value === '' || value == null ? null : Number(value));
 
 function dueText(due) {
-  if (due.status === 'inconnu') return due.oneOff ? 'Vérification à faire' : 'Intervalle à confirmer';
+  if (due.status === 'inconnu') {
+    if (due.needsLast) return 'Dernière date à renseigner';
+    return due.oneOff ? 'Vérification à faire' : 'Intervalle à confirmer';
+  }
   if (due.status === 'fait') return 'Fait';
   const prefix = due.estimated ? 'Vers ' : '';
   if (due.km != null && due.estimated) return `${prefix}${fmtDate(due.date)} (${fmtKm(due.km)})`;
@@ -43,6 +50,7 @@ const LEVEL = {
   officiel: 'Source officielle',
   tiers: 'Source non officielle',
   'a-confirmer': 'À confirmer',
+  conseil: 'Pour t’aider',
 };
 
 const statusBadge = (due) =>
@@ -85,7 +93,6 @@ function closeModal() {
 
 const ARROW = '<svg class="arrow" viewBox="0 0 56 40" aria-hidden="true"><path d="M2 20h50M34 3l18 17-18 17"/></svg>';
 const GEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>';
-const fmtNum = (n) => Number(n).toLocaleString('fr-FR');
 const pill = (text, kind = '') => `<span class="pill ${kind}">${h(text)}</span>`;
 
 /** Le délai restant, en jours ou en kilomètres selon l'axe qui décide l'échéance. */
@@ -388,6 +395,23 @@ function render() {
 
 // --- Fenêtres ----------------------------------------------------------------
 
+function guideHtml(op) {
+  const guide = GUIDE[op.id];
+  if (!guide) return '';
+  const perYear = kmStats(S.carnet, today()).perYear;
+  const rhythm = guide.rhythmKm && perYear
+    ? `<p class="small">À ton rythme d’environ ${fmtKm(perYear)} par an, ${fmtKm(guide.rhythmKm)} représentent environ ${Math.round((guide.rhythmKm / perYear) * 12)} mois.</p>`
+    : '';
+  const sections = guide.sections.map((s, index) => `
+    <details class="guide" ${index === 0 ? 'open' : ''}>
+      <summary>${h(s.title)}</summary>
+      <span class="badge">${h(LEVEL[s.level])}</span>
+      <ul>${s.items.map((item) => `<li>${h(item)}</li>`).join('')}</ul>
+      ${s.source ? `<p class="small"><a href="${h(s.source.url)}" target="_blank" rel="noopener noreferrer">${h(s.source.label)}</a></p>` : ''}
+    </details>`).join('');
+  return `<h4>Pour en savoir plus</h4>${rhythm}${sections}`;
+}
+
 function opModal(id) {
   const op = S.carnet.operations.find((o) => o.id === id);
   const due = nextDue(op, S.carnet, today());
@@ -406,7 +430,8 @@ function opModal(id) {
       <button class="primary" data-action="new-appt" data-date="${today()}" data-op="${h(op.id)}">Prendre rendez-vous</button>
       <button data-action="done" data-id="${h(op.id)}">Marquer comme fait</button>
       <button data-action="edit-op" data-id="${h(op.id)}">Modifier</button>
-    </div>`);
+    </div>
+    ${guideHtml(op)}`);
 }
 
 function doneModal(id) {
@@ -571,6 +596,7 @@ async function commit(mutate) {
 
 async function reload() {
   const { data, rev } = await S.store.load();
+  if (data) upgradeCarnet(data);
   S.carnet = data;
   S.rev = rev;
   if (data) render();

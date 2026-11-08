@@ -87,6 +87,11 @@ export function nextDue(op, carnet, today) {
     else if (!op.lastDoneDate) kmAxis = op.intervalKm;
   }
 
+  // Tant que la dernière date est inconnue, un retard affiché serait sans fondement.
+  if (op.needsLastDone && !op.lastDoneDate && !op.dueDate && op.dueKm == null) {
+    return { status: 'inconnu', date: null, km: null, estimated: false, needsLast: true };
+  }
+
   if (!dateAxis && kmAxis === null) {
     return { status: op.lastDoneDate ? 'fait' : 'inconnu', date: null, km: null, estimated: false, oneOff: Boolean(op.oneOff) };
   }
@@ -237,7 +242,29 @@ const SOURCES = {
     url: 'https://www.volkswagen.fr/fr/entretenir-ma-volkswagen/action-de-rappel/campagne-rappel-airbag-takata.html',
   },
   tableau: { level: 'constat', label: 'Affiché par le tableau de bord', url: null },
+  planOfficiel: {
+    level: 'officiel',
+    label: 'Volkswagen France, plan d’entretien',
+    url: 'https://www.volkswagen.fr/fr/entretenir-ma-volkswagen/entretien-et-pieces/plan-entretien.html',
+  },
+  freinOfficiel: {
+    level: 'officiel',
+    label: 'Volkswagen France, freins',
+    url: 'https://www.volkswagen.fr/fr/entretenir-ma-volkswagen/entretien-et-pieces/reparations-controles/freins.html',
+  },
+  climOfficiel: {
+    level: 'officiel',
+    label: 'Volkswagen France, climatisation et filtres',
+    url: 'https://www.volkswagen.fr/fr/entretenir-ma-volkswagen/entretien-et-pieces/reparations-controles/climatisation-et-filtre.html',
+  },
+  batterieOfficiel: {
+    level: 'officiel',
+    label: 'Volkswagen France, batteries',
+    url: 'https://www.volkswagen.fr/fr/entretenir-ma-volkswagen/entretien-et-pieces/reparations-controles/batteries.html',
+  },
 };
+
+const TEMPLATE_VERSION = 2;
 
 function operation(id, title, description, extra = {}) {
   return {
@@ -260,8 +287,8 @@ function operation(id, title, description, extra = {}) {
   };
 }
 
-export function createCarnet({ miseEnCirculation, km, serviceDays, today }) {
-  const operations = [
+function templateOperations(today, serviceDays) {
+  return [
     operation('service', 'Service d’entretien', 'Révision demandée par le tableau de bord. Demande au garage si la voiture est en service fixe ou LongLife, et le détail des opérations prévues.', {
       dueDate: serviceDays != null ? addDays(today, serviceDays) : null,
       source: SOURCES.tableau,
@@ -281,19 +308,66 @@ export function createCarnet({ miseEnCirculation, km, serviceDays, today }) {
       source: SOURCES.ad,
     }),
     operation('boite', 'Vidange de boîte automatique', 'Seulement si la voiture a une boîte automatique DSG. Demande si elle est due à ce kilométrage et si elle a déjà été faite.'),
-    operation('depollution', 'Contrôle AdBlue et filtre à particules', 'Points souvent signalés par des usagers sur ce moteur. À faire contrôler si un message antipollution apparaît ou lors d’une révision.', {
-      source: SOURCES.fiches,
+    operation('depollution', 'Contrôle AdBlue et filtre à particules', 'Volkswagen prévoit un contrôle du filtre à particules à partir de 150 000 km, puis tous les 30 000 km. À faire voir aussi si un message antipollution apparaît.', {
+      dueKm: 150000,
+      intervalKm: 30000,
+      source: SOURCES.planOfficiel,
     }),
-    operation('frein', 'Liquide de frein', 'À remplacer périodiquement. Relève l’intervalle sur le plan d’entretien de la voiture.'),
+    operation('frein', 'Liquide de frein', 'Volkswagen recommande un remplacement tous les deux ans. Indique la date du dernier remplacement pour calculer l’échéance.', {
+      intervalMonths: 24,
+      needsLastDone: true,
+      source: SOURCES.freinOfficiel,
+    }),
     operation('habitacle', 'Filtre d’habitacle', 'Renseigne son intervalle à partir du plan d’entretien ou d’une facture.'),
     operation('air', 'Filtre à air', 'Renseigne son intervalle à partir du plan d’entretien ou d’une facture.'),
     operation('gazole', 'Filtre à gazole', 'Renseigne son intervalle à partir du plan d’entretien ou d’une facture.'),
     operation('freins', 'Plaquettes et disques de frein', 'Remplacement selon l’usure. Note ce que le garage a mesuré lors du dernier contrôle.'),
     operation('pneus', 'Pneus', 'Remplacement selon l’usure et l’âge. Note la date de montage et le kilométrage.'),
+    operation('clim', 'Contrôle de la climatisation', 'Volkswagen conseille une révision de la climatisation une fois par an. Indique la date de la dernière pour calculer l’échéance.', {
+      intervalMonths: 12,
+      needsLastDone: true,
+      source: SOURCES.climOfficiel,
+    }),
+    operation('batterie', 'Contrôle de la batterie', 'Contrôle annuel inclus dans la révision périodique. Indique la date du dernier pour calculer l’échéance.', {
+      intervalMonths: 12,
+      needsLastDone: true,
+      source: SOURCES.batterieOfficiel,
+    }),
   ];
+}
+
+/** Met à niveau un carnet créé avec un ancien modèle, sans écraser ce que l'utilisateur a renseigné. */
+export function upgradeCarnet(carnet) {
+  if ((carnet.templateVersion || 1) >= TEMPLATE_VERSION) return false;
+  const template = templateOperations(null, null);
+  const find = (id) => carnet.operations.find((o) => o.id === id);
+  const model = (id) => template.find((o) => o.id === id);
+
+  for (const op of template) {
+    if (!find(op.id) && ['clim', 'batterie'].includes(op.id)) carnet.operations.push(op);
+  }
+
+  const frein = find('frein');
+  if (frein && frein.intervalMonths == null) {
+    Object.assign(frein, { intervalMonths: 24, needsLastDone: true, source: model('frein').source, description: model('frein').description });
+  }
+
+  const depollution = find('depollution');
+  if (depollution && depollution.intervalKm == null && depollution.dueKm == null) {
+    Object.assign(depollution, { intervalKm: 30000, source: model('depollution').source, description: model('depollution').description });
+    if (depollution.lastDoneKm == null) depollution.dueKm = 150000;
+  }
+
+  carnet.templateVersion = TEMPLATE_VERSION;
+  return true;
+}
+
+export function createCarnet({ miseEnCirculation, km, serviceDays, today }) {
+  const operations = templateOperations(today, serviceDays);
 
   return {
     version: 1,
+    templateVersion: TEMPLATE_VERSION,
     vehicle: {
       marque: 'Volkswagen',
       modele: 'Touran',

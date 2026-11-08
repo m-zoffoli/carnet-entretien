@@ -2,21 +2,18 @@
    Fond papier, filets noirs, une entrée par ligne. Ce qui demande de l'attention
    devient un bloc plein, carré, bord à bord. Les détails tiennent dans des pilules. */
 
-/* Apfel Grotezk (Collletttivo, licence libre), la police de l'app.
-   Déposer ApfelGrotezk-Regular.woff2 et ApfelGrotezk-Mittel.woff2 dans fonts/.
-   Si elle est déjà installée sur l'appareil, elle est prise directement. */
+/* Apfel Grotezk, Collletttivo, licence SIL OFL 1.1 (voir fonts/OFL.txt).
+   Regular pour les chiffres et les lignes, Fett pour les petits libellés. */
 @font-face {
   font-family: "Apfel Grotezk";
-  src: local("Apfel Grotezk"), local("ApfelGrotezk-Regular"), local("Apfel Grotesk"), local("ApfelGrotesk-Regular"),
-    url("../fonts/ApfelGrotezk-Regular.woff2") format("woff2");
+  src: url("../fonts/apfel-grotezk-400.woff2") format("woff2");
   font-weight: 400;
   font-display: swap;
 }
 @font-face {
   font-family: "Apfel Grotezk";
-  src: local("Apfel Grotezk Mittel"), local("ApfelGrotezk-Mittel"), local("Apfel Grotesk Mittel"), local("ApfelGrotesk-Mittel"),
-    url("../fonts/ApfelGrotezk-Mittel.woff2") format("woff2");
-  font-weight: 500;
+  src: url("../fonts/apfel-grotezk-700.woff2") format("woff2");
+  font-weight: 700;
   font-display: swap;
 }
 
@@ -90,7 +87,7 @@ h2 {
   padding: 10px var(--gut) 8px;
   border-top: var(--rule);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
   color: var(--ink);
@@ -98,7 +95,7 @@ h2 {
 h3 { font-size: 30px; font-weight: 400; letter-spacing: -0.03em; line-height: 1.05; margin: 0 0 12px; padding-right: 48px; }
 p { margin: 8px 0; }
 a { color: var(--ink); text-underline-offset: 3px; }
-strong { font-weight: 500; }
+strong { font-weight: 700; }
 .muted { color: var(--muted); }
 .small { font-size: 14px; }
 .loading { text-align: center; padding: 80px 0; color: var(--muted); }
@@ -339,7 +336,7 @@ dialog {
 dialog::backdrop { background: rgb(20 20 20 / .55); }
 .close { position: absolute; top: 8px; right: 8px; width: 44px; padding: 0; border: 0; font-size: 28px; }
 
-label { display: block; margin: 12px 0; font-size: 14px; font-weight: 500; }
+label { display: block; margin: 12px 0; font-size: 14px; font-weight: 700; }
 label input, label select, label textarea {
   display: block;
   width: 100%;
@@ -368,7 +365,7 @@ label textarea { min-height: 80px; resize: vertical; }
 label.check { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-weight: 400; font-size: 16px; }
 label.check input { display: inline-block; width: 22px; min-height: 22px; margin: 0; flex: none; accent-color: var(--cobalt); }
 fieldset { border: 0; padding: 0; margin: 12px 0; }
-legend { font-size: 14px; font-weight: 500; padding: 0; }
+legend { font-size: 14px; font-weight: 700; padding: 0; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .two label { margin: 6px 0; min-width: 0; }
 
@@ -397,6 +394,15 @@ legend { font-size: 14px; font-weight: 500; padding: 0; }
 .day.today .mark { border-color: var(--on-cobalt); }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 10px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* --- Fiches « Pour en savoir plus » ------------------------------------- */
+
+h4 { font-size: 13px; font-weight: 700; margin: 24px 0 6px; padding-top: 10px; border-top: var(--rule); }
+.guide { border-top: var(--hair); padding: 10px 0; }
+.guide summary { min-height: 44px; display: flex; align-items: center; font-size: 20px; letter-spacing: -0.02em; cursor: pointer; }
+.guide .badge { margin-top: 4px; }
+.guide ul { margin: 8px 0; padding-left: 20px; }
+.guide li { margin: 6px 0; }
 
 /* --- Divers ---------------------------------------------------------------- */
 

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addMonths, addDays, applyDone, buildIcs, createCarnet, forecast, kmStats, nextDue, spentByYear } from '../js/domain.js';
+import { addMonths, addDays, applyDone, buildIcs, createCarnet, forecast, kmStats, nextDue, spentByYear, upgradeCarnet } from '../js/domain.js';
+import { GUIDE } from '../js/guide.js';
 
 const today = '2026-11-08';
 const carnet = () => createCarnet({ miseEnCirculation: '2022-03-15', km: 140000, serviceDays: 16, today });
@@ -47,9 +48,49 @@ test('la courroie est atteinte d’abord par le kilométrage', () => {
 
 test('une opération sans intervalle reste inconnue, puis faite', () => {
   const c = carnet();
-  assert.equal(nextDue(op(c, 'frein'), c, today).status, 'inconnu');
-  applyDone(op(c, 'frein'), { date: today, km: 140000 });
-  assert.equal(nextDue(op(c, 'frein'), c, today).status, 'fait');
+  assert.equal(nextDue(op(c, 'habitacle'), c, today).status, 'inconnu');
+  applyDone(op(c, 'habitacle'), { date: today, km: 140000 });
+  assert.equal(nextDue(op(c, 'habitacle'), c, today).status, 'fait');
+});
+
+test('le liquide de frein attend sa dernière date avant de calculer', () => {
+  const c = carnet();
+  const before = nextDue(op(c, 'frein'), c, today);
+  assert.equal(before.status, 'inconnu');
+  assert.equal(before.needsLast, true);
+  applyDone(op(c, 'frein'), { date: '2026-01-10', km: 120000 });
+  assert.equal(nextDue(op(c, 'frein'), c, today).date, '2028-01-10');
+});
+
+test('le filtre à particules se contrôle à 150 000 km puis tous les 30 000 km', () => {
+  const c = carnet();
+  assert.equal(nextDue(op(c, 'depollution'), c, today).km, 150000);
+  applyDone(op(c, 'depollution'), { date: today, km: 150000 });
+  assert.equal(nextDue(op(c, 'depollution'), c, today).km, 180000);
+});
+
+test('un ancien carnet est mis à niveau sans perdre les saisies', () => {
+  const c = carnet();
+  delete c.templateVersion;
+  c.operations = c.operations.filter((o) => !['clim', 'batterie'].includes(o.id));
+  Object.assign(op(c, 'frein'), { intervalMonths: null, needsLastDone: undefined, lastDoneDate: '2025-05-01', lastDoneKm: 100000 });
+  Object.assign(op(c, 'depollution'), { intervalKm: null, dueKm: null });
+  assert.equal(upgradeCarnet(c), true);
+  assert.equal(upgradeCarnet(c), false);
+  assert.ok(op(c, 'clim') && op(c, 'batterie'));
+  assert.equal(nextDue(op(c, 'frein'), c, today).date, '2027-05-01');
+  assert.equal(op(c, 'depollution').dueKm, 150000);
+});
+
+test('chaque bloc du guide cite une source, sauf les conseils', () => {
+  const c = carnet();
+  for (const o of c.operations) assert.ok(GUIDE[o.id], o.id);
+  for (const entry of Object.values(GUIDE)) {
+    for (const s of entry.sections) {
+      assert.ok(s.items.length > 0);
+      if (s.level !== 'conseil') assert.ok(s.source?.url, s.title);
+    }
+  }
 });
 
 test('le budget ne compte que les montants renseignés et signale les autres', () => {
@@ -59,7 +100,7 @@ test('le budget ne compte que les montants renseignés et signale les autres', (
   const f = forecast(c, today, 12);
   assert.equal(f.min, 200);
   assert.equal(f.max, 400);
-  assert.equal(f.unpriced, 1);
+  assert.equal(f.unpriced, 2);
 });
 
 test('les dépenses sont totalisées par année', () => {
