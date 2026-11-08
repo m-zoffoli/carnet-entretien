@@ -1,5 +1,5 @@
 import {
-  addDays, applyDone, applyHistory, buildDueIcs, buildIcs, calendarFeedUrl, createCarnet, diffDays, forecast, fromISO, kmStats, nextDue,
+  addDays, applyDone, applyHistory, buildAlertPrompt, buildDueIcs, buildIcs, calendarFeedUrl, claudeChatUrl, createCarnet, diffDays, forecast, fromISO, kmStats, nextDue,
   parseDashboard, parseInvoice, priceOf, sortedOperations, spendPlan, spentByYear, toISO, uid, upgradeCarnet,
 } from './domain.js';
 import { GUIDE } from './guide.js';
@@ -690,6 +690,21 @@ function alertFormModal(photo) {
   if (photo) fillFromPhoto(photo, modalBody.querySelector('form'));
 }
 
+let claudePrompt = '';
+
+/** Après une alerte : un toucher ouvre Claude, car un iPhone bloque une ouverture sans geste. */
+function alertSavedModal(prompt) {
+  claudePrompt = prompt;
+  openModal(`
+    <h3>Alerte enregistrée</h3>
+    <p>Claude peut t’expliquer ce message et te dire quoi demander au garage.</p>
+    <p class="muted small">La question est aussi copiée : si elle n’apparaît pas dans Claude, il suffit de la coller.</p>
+    <div class="actions">
+      <a class="button primary" href="${h(claudeChatUrl(prompt))}" target="_blank" rel="noopener" data-action="ask-claude">Demander à Claude</a>
+      <button data-action="close">Plus tard</button>
+    </div>`);
+}
+
 function apptFormModal({ id, date, opId }) {
   const existing = id ? S.carnet.appointments.find((a) => a.id === id) : null;
   const op = opId ? S.carnet.operations.find((o) => o.id === opId) : null;
@@ -1000,7 +1015,10 @@ const FORMS = {
         Object.assign(c.operations.find((o) => o.id === values.opId), due);
       }
     });
-    if (saved) closeModal();
+    if (saved) {
+      const title = values.opId === 'new' ? values.title : S.carnet.operations.find((o) => o.id === values.opId).title;
+      alertSavedModal(buildAlertPrompt(S.carnet, { title, days: num(values.serviceDays), km: num(values.serviceKm) }, t));
+    }
   },
 
   async done(values, form) {
@@ -1080,6 +1098,7 @@ const ACTIONS = {
   close: closeModal,
   km: kmModal,
   alert: alertChoiceModal,
+  'ask-claude': () => navigator.clipboard?.writeText(claudePrompt).catch(() => {}),
   'alert-form': () => alertFormModal(),
   'budget-year': ({ year }) => { S.budgetYear = year; render(); },
   jump: ({ id }) => document.getElementById(`op-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
