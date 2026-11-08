@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addMonths, addDays, applyDone, applyHistory, buildAlertPrompt, buildDueIcs, buildIcs, calendarFeedUrl, claudeChatUrl, createCarnet, forecast, kmStats, nextDue, parseDashboard, parseInvoice, spendPlan, spentByYear, upgradeCarnet } from '../js/domain.js';
+import { addMonths, addDays, applyDone, applyClaudeUpdate, applyHistory, buildAlertPrompt, buildCheckPrompt, buildDueIcs, buildInterventionsCsv, invoiceRead, parseClaudeUpdate, buildIcs, calendarFeedUrl, claudeChatUrl, createCarnet, forecast, kmStats, nextDue, parseDashboard, parseInvoice, spendPlan, spentByYear, upgradeCarnet } from '../js/domain.js';
 import { GUIDE } from '../js/guide.js';
 
 const today = '2026-11-08';
@@ -119,8 +119,8 @@ test('la question pour Claude donne le contexte sans identifiant personnel', () 
   c.vehicle.immatriculation = 'AB-123-CD';
   c.vehicle.vin = 'VIN12345678901234';
   applyHistory(c, HISTORY);
-  const prompt = buildAlertPrompt(c, { title: 'Service d’entretien', days: 16, km: 12900 }, today);
-  assert.match(prompt, /« Service d’entretien », dans 16 jours ou 12900 km/);
+  const prompt = buildAlertPrompt(c, { title: 'Service d’entretien', days: 16, km: 12500 }, today);
+  assert.match(prompt, /« Service d’entretien », dans 16 jours ou 12500 km/);
   assert.match(prompt, /18\/06\/2024, 85000 km : Liquide de frein \(Vidange\)/);
   assert.doesNotMatch(prompt, /AB-123-CD|VIN1234/);
 });
@@ -131,6 +131,59 @@ test('la question ne mentionne que le délai renseigné', () => {
 
 test('le lien vers Claude encode la question', () => {
   assert.equal(claudeChatUrl('a b & c'), 'https://claude.ai/new?q=a%20b%20%26%20c');
+});
+
+test('une facture lue garde seulement les lignes utiles à l’entretien', () => {
+  const read = invoiceRead('M. Dupont\n06 12 34 56 78\nVidange moteur 80,00\nFiltre à huile 12,00\nTVA 20 %');
+  assert.deepEqual(read.lines, ['Vidange moteur 80,00', 'Filtre à huile 12,00']);
+  assert.match(read.text, /Dupont/);
+});
+
+test('le CSV réunit les interventions sans compter deux fois une facture', () => {
+  const c = carnet();
+  applyHistory(c, HISTORY);
+  applyDone(op(c, 'freins'), { date: '2026-03-01', km: 130000, note: 'Facture : Freins' });
+  c.invoices.push({ date: '2026-03-01', km: 130000, title: 'Freins', ops: ['freins'], garage: 'Garage; Centre', amount: 240.5, read: { lines: ['Plaquettes avant'] } });
+  const lines = buildInterventionsCsv(c).split('\n');
+  assert.equal(lines[0], 'date;kilometrage;intervention;detail;garage;montant_eur;source');
+  assert.equal(lines.filter((l) => l.startsWith('2026-03-01')).length, 1);
+  assert.match(lines.find((l) => l.startsWith('2026-03-01')), /Plaquettes avant;"Garage; Centre";240,5;facture/);
+  assert.equal(lines[1].slice(0, 10), '2024-06-18');
+});
+
+test('la question de vérification contient le CSV, les identifiants et le format de réponse', () => {
+  const c = carnet();
+  const prompt = buildCheckPrompt(c, 'date;km', today);
+  assert.match(prompt, /```csv\ndate;km\n```/);
+  assert.match(prompt, /^frein \| Liquide de frein/m);
+  assert.match(prompt, /"version":1/);
+});
+
+test('une réponse de Claude ne produit que des échéances valides sur des entretiens connus', () => {
+  const c = carnet();
+  const fence = '`'.repeat(3);
+  const reply = [
+    'Voici mon analyse, avec un exemple {pas du json}.',
+    `${fence}json`,
+    '{"version":1,"operations":[',
+    '  {"id":"frein","due":{"date":"2026-12-01","km":null},"note":"En retard."},',
+    '  {"id":"inconnue","due":{"date":"2026-12-01"}},',
+    '  {"id":"air","due":{"date":"2026-02-31","km":-5}},',
+    '  {"id":"pneus","due":{"date":null,"km":null}}',
+    ']}',
+    fence,
+  ].join('\n');
+  const changes = parseClaudeUpdate(reply, c);
+  assert.deepEqual(changes, [{ id: 'frein', title: 'Liquide de frein', date: '2026-12-01', km: null, note: 'En retard.' }]);
+  applyClaudeUpdate(c, changes);
+  assert.equal(op(c, 'frein').dueDate, '2026-12-01');
+  assert.equal(op(c, 'frein').note, 'En retard.');
+  assert.equal(nextDue(op(c, 'frein'), c, today).date, '2026-12-01');
+});
+
+test('une réponse sans bloc de mise à jour est refusée', () => {
+  assert.throws(() => parseClaudeUpdate('Tout va bien.', carnet()), /Aucun bloc/);
+  assert.throws(() => parseClaudeUpdate('{"version":2,"operations":[]}', carnet()), /Aucun bloc/);
 });
 
 test('le service suit la date affichée par le tableau de bord', () => {
@@ -235,16 +288,16 @@ test('la projection met à part les opérations sans date', () => {
 });
 
 test('la photo du message de service donne les jours et les kilomètres restants', () => {
-  assert.deepEqual(parseDashboard('Service entretien\ndans 16 jours ou 12900 km', 142457),
-    { km: null, serviceDays: 16, serviceKm: 12900 });
-  assert.deepEqual(parseDashboard('Service dans 16 jours\nou 12 900 km', 142457),
-    { km: null, serviceDays: 16, serviceKm: 12900 });
+  assert.deepEqual(parseDashboard('Service entretien\ndans 16 jours ou 12500 km', 143210),
+    { km: null, serviceDays: 16, serviceKm: 12500 });
+  assert.deepEqual(parseDashboard('Service dans 16 jours\nou 12 500 km', 143210),
+    { km: null, serviceDays: 16, serviceKm: 12500 });
 });
 
 test('la photo du compteur donne le kilométrage, sans confondre les autres chiffres', () => {
-  assert.equal(parseDashboard('142 457 km\n12.5 °C 850 km', 140000).km, 142457);
+  assert.equal(parseDashboard('143 210 km\n12.5 °C 850 km', 140000).km, 143210);
   assert.equal(parseDashboard('14300 km 142458', 140000).km, 142458);
-  assert.equal(parseDashboard('O 142457', 140000).km, 142457);
+  assert.equal(parseDashboard('O 143210', 140000).km, 143210);
   assert.equal(parseDashboard('999 999 km', 140000).km, null, 'saut impossible depuis le dernier relevé');
 });
 
@@ -258,16 +311,20 @@ test('une facture donne son objet, sa date, son total, son kilométrage et son g
 12 rue des Lilas
 Facture n° 2026-118 du 14/10/2026
 Véhicule : VW Touran  Mise en circulation 27/07/2022
-Kilométrage : 142 457
+Kilométrage : 143 210
 Révision complète       180,00
 Filtre à huile           24,50
 Total HT                340,40
 TVA 20 %                 68,08
 Total TTC               408,48 €
 Prochaine révision à 172 000 km`;
-  assert.deepEqual(parseInvoice(text, 142457, today), {
-    title: 'Révision', date: '2026-10-14', amount: 408.48, km: 142457, garage: 'GARAGE DU CENTRE',
+  assert.deepEqual(parseInvoice(text, 143210, today), {
+    title: 'Révision', date: '2026-10-14', amount: 408.48, km: 143210, garage: 'GARAGE DU CENTRE',
   });
+});
+
+test('le kilométrage d’une facture peut être séparé de son libellé par un mot', () => {
+  assert.equal(parseInvoice('Dernier kilométrage constaté : 131313', 143210, today).km, 131313);
 });
 
 test('le montant vient du net à payer, y compris sur la ligne suivante', () => {
@@ -281,7 +338,7 @@ test('une date impossible ou future n’est pas retenue', () => {
 });
 
 test('une facture illisible laisse tous les champs vides', () => {
-  assert.deepEqual(parseInvoice('xx yy', 142457, today), { title: null, date: null, amount: null, km: null, garage: null });
+  assert.deepEqual(parseInvoice('xx yy', 143210, today), { title: null, date: null, amount: null, km: null, garage: null });
 });
 
 test('les dépenses sont totalisées par année', () => {

@@ -165,11 +165,8 @@ const frenchDate = (iso) => iso.split('-').reverse().join('/');
 const ALERT_HISTORY_LINES = 8;
 
 /** La question préparée pour Claude. Ni plaque ni numéro de série : seulement ce qui aide à répondre. */
-export function buildAlertPrompt(carnet, { title, days, km }, today) {
-  const v = carnet.vehicle;
-  const stats = kmStats(carnet, today);
-  const delay = [days != null ? `${days} jours` : null, km != null ? `${km} km` : null].filter(Boolean).join(' ou ');
-  const vehicle = [
+function vehicleLine(v) {
+  return [
     [v.marque, v.modele].filter(Boolean).join(' '),
     v.cylindree && `${v.cylindree} cm3`,
     v.energie,
@@ -177,6 +174,11 @@ export function buildAlertPrompt(carnet, { title, days, km }, today) {
     v.boite && `boîte ${v.boite}`,
     v.miseEnCirculation && `mise en circulation le ${frenchDate(v.miseEnCirculation)}`,
   ].filter(Boolean).join(', ');
+}
+
+export function buildAlertPrompt(carnet, { title, days, km }, today) {
+  const stats = kmStats(carnet, today);
+  const delay = [days != null ? `${days} jours` : null, km != null ? `${km} km` : null].filter(Boolean).join(' ou ');
   const history = carnet.operations
     .flatMap((op) => (op.history || []).map((entry) => ({ ...entry, title: op.title })))
     .sort((a, b) => b.date.localeCompare(a.date))
@@ -185,11 +187,112 @@ export function buildAlertPrompt(carnet, { title, days, km }, today) {
 
   return [
     `Ma voiture affiche cette alerte : « ${title} »${delay ? `, dans ${delay}` : ''}.`,
-    `Véhicule : ${vehicle}.`,
+    `Véhicule : ${vehicleLine(carnet.vehicle)}.`,
     `Kilométrage : environ ${stats.km} km, à environ ${stats.perMonth} km par mois.`,
     ...(history.length ? ['Derniers entretiens connus :', ...history] : []),
     'Explique-moi ce que signifie cette alerte, son degré d’urgence, ce que je dois demander au garage et un ordre de prix en France. Précise ce dont tu n’es pas sûr.',
   ].join('\n');
+}
+
+const MAINTENANCE_LINE = /vidange|huile|filtre|plaquette|disque|frein|pneu|courroie|distribution|pompe|batterie|liquide|revision|entretien|clim|adblue|boite|embrayage|amortisseur|balai/i;
+const MAX_READ_LINES = 25;
+const MAX_READ_TEXT = 8000;
+
+/** Ce qu'on garde d'une facture lue : le texte, et les seules lignes utiles aux questions d'entretien. */
+export function invoiceRead(text) {
+  const lines = text.split('\n').map((line) => line.trim())
+    .filter((line) => line && line.length <= 120 && MAINTENANCE_LINE.test(plain(line)))
+    .slice(0, MAX_READ_LINES);
+  return { text: text.slice(0, MAX_READ_TEXT), lines };
+}
+
+const csvCell = (value) => {
+  const text = String(value ?? '');
+  return /[";\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+/** Toutes les interventions connues, des entretiens et des factures, de la plus ancienne à la plus récente. */
+export function buildInterventionsCsv(carnet) {
+  const titleOf = (id) => carnet.operations.find((o) => o.id === id)?.title;
+  const fromInvoice = (date, opId) => carnet.invoices.some((inv) => inv.date === date && (inv.ops || []).includes(opId));
+  const rows = [];
+  for (const op of carnet.operations) {
+    for (const entry of op.history || []) {
+      if (String(entry.note).startsWith('Facture') && fromInvoice(entry.date, op.id)) continue;
+      rows.push([entry.date, entry.km, op.title, entry.note, '', '', 'carnet']);
+    }
+  }
+  for (const inv of carnet.invoices) {
+    const done = (inv.ops || []).map(titleOf).filter(Boolean).join(', ');
+    const detail = [inv.notes, ...(inv.read?.lines || [])].filter(Boolean).join(' / ');
+    const amount = inv.amount == null ? '' : String(inv.amount).replace('.', ',');
+    rows.push([inv.date, inv.km, done || inv.title, detail, inv.garage, amount, 'facture']);
+  }
+  rows.sort((a, b) => a[0].localeCompare(b[0]));
+  const header = ['date', 'kilometrage', 'intervention', 'detail', 'garage', 'montant_eur', 'source'];
+  return [header, ...rows].map((row) => row.map(csvCell).join(';')).join('\n');
+}
+
+/** La question de vérification : l'historique, l'état du carnet et le format de réponse attendu. */
+export function buildCheckPrompt(carnet, csv, today) {
+  const stats = kmStats(carnet, today);
+  const followed = sortedOperations(carnet, today).map(({ op, due }) => [
+    op.id,
+    op.title,
+    `dernier : ${op.lastDoneDate || 'inconnu'}${op.lastDoneKm != null ? ` à ${op.lastDoneKm} km` : ''}`,
+    `échéance actuelle : ${due.date || 'aucune'}${due.km != null ? ` ou ${due.km} km` : ''}`,
+  ].join(' | '));
+  return [
+    `Nous sommes le ${frenchDate(today)}. Voici le carnet d’entretien de ma voiture.`,
+    `Véhicule : ${vehicleLine(carnet.vehicle)}.`,
+    `Kilométrage : environ ${stats.km} km, à environ ${stats.perMonth} km par mois.`,
+    '', 'Historique des interventions (CSV) :', '```csv', csv, '```',
+    '', 'Entretiens suivis (identifiant | titre | dernier | échéance) :', ...followed,
+    '', 'Vérifie ce qui a bien été fait et ce qui manque, puis recalcule les prochaines échéances d’après le plan du constructeur pour ce moteur. N’invente aucune intervention et précise ce dont tu n’es pas sûr.',
+    'Réponds d’abord en clair. Termine par un seul bloc json, sans rien après, listant uniquement les entretiens dont l’échéance doit changer, avec les identifiants ci-dessus :',
+    '```json', '{"version":1,"operations":[{"id":"service","due":{"date":"AAAA-MM-JJ ou null","km":155000},"note":"une phrase"}]}', '```',
+  ].join('\n');
+}
+
+const isRealDate = (iso) => typeof iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(iso) && toISO(fromISO(iso)) === iso;
+const isKm = (km) => Number.isInteger(km) && km >= 0 && km <= 2000000;
+
+/**
+ * Lit la réponse collée depuis Claude. Seule une échéance ou une remarque sur un entretien
+ * existant peut en sortir : le reste du texte n'a aucun effet sur le carnet.
+ */
+export function parseClaudeUpdate(reply, carnet) {
+  const fence = [...reply.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map((m) => m[1]).filter((b) => b.includes('"operations"')).pop();
+  const candidate = fence ?? reply.slice(reply.indexOf('{'), reply.lastIndexOf('}') + 1);
+  let data;
+  try {
+    data = JSON.parse(candidate);
+  } catch {
+    throw new Error('Aucun bloc de mise à jour lisible dans cette réponse.');
+  }
+  if (data?.version !== 1 || !Array.isArray(data.operations)) throw new Error('Aucun bloc de mise à jour lisible dans cette réponse.');
+
+  const changes = [];
+  for (const item of data.operations) {
+    const op = carnet.operations.find((o) => o.id === item?.id);
+    if (!op) continue;
+    const date = isRealDate(item.due?.date) ? item.due.date : null;
+    const km = isKm(item.due?.km) ? item.due.km : null;
+    if (date === null && km === null) continue;
+    if (date === (op.dueDate ?? null) && km === (op.dueKm ?? null)) continue;
+    changes.push({ id: op.id, title: op.title, date, km, note: typeof item.note === 'string' ? item.note.slice(0, 300) : '' });
+  }
+  return changes;
+}
+
+export function applyClaudeUpdate(carnet, changes) {
+  for (const { id, date, km, note } of changes) {
+    const op = carnet.operations.find((o) => o.id === id);
+    if (!op) continue;
+    op.dueDate = date;
+    op.dueKm = km;
+    if (note) op.note = note;
+  }
 }
 
 export const claudeChatUrl = (prompt) => `https://claude.ai/new?q=${encodeURIComponent(prompt)}`;
@@ -318,7 +421,7 @@ function invoiceKm(lines, lastKm) {
   const isPlausible = (value) => value >= 1000 && value <= lastKm + MAX_ODOMETER_JUMP;
   const usable = lines.filter((line) => !OTHER_KM_LINE.test(line));
   const patterns = [
-    /(?:kilometrage|compteur|\bkm)\s*[:.-]?\s*(\d{1,3}(?:[ .]\d{3})+|\d{4,7})/i,
+    /(?:kilometrage|compteur|\bkm)[^\d\n]{0,25}(\d{1,3}(?:[ .]\d{3})+|\d{4,7})/i,
     new RegExp(`(${NUMBER})\\s*km\\b`, 'i'),
   ];
   for (const pattern of patterns) {
