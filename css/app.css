@@ -185,6 +185,15 @@ label input, label select, label textarea {
   font-size: 16px;
   font-weight: 400;
 }
+/* iOS donne aux champs date et heure une largeur propre qui déborde sans cela. */
+label input[type="date"], label input[type="time"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  max-width: 100%;
+  height: 44px;
+}
+input::-webkit-date-and-time-value { text-align: left; }
 label textarea { min-height: 80px; resize: vertical; }
 label.check { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-weight: 400; font-size: 16px; }
 label.check input { display: inline-block; width: 22px; min-height: 22px; margin: 0; flex: none; }

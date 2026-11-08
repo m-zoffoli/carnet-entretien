@@ -73,7 +73,7 @@ export async function beginDropboxAuth() {
   const verifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
   const state = base64Url(crypto.getRandomValues(new Uint8Array(16)));
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
-  sessionStorage.setItem('carnet.pkce', JSON.stringify({ verifier, state }));
+  write('carnet.pkce', JSON.stringify({ verifier, state }));
   const params = new URLSearchParams({
     client_id: DROPBOX_APP_KEY,
     response_type: 'code',
@@ -100,8 +100,8 @@ async function tokenRequest(fields) {
 export async function completeDropboxAuth() {
   const params = new URLSearchParams(location.search);
   if (!params.has('code') && !params.has('error')) return false;
-  const saved = JSON.parse(sessionStorage.getItem('carnet.pkce') || 'null');
-  sessionStorage.removeItem('carnet.pkce');
+  const saved = JSON.parse(read('carnet.pkce') || 'null');
+  write('carnet.pkce', null);
   history.replaceState(null, '', location.pathname);
   if (params.has('error')) throw new Error('Connexion Dropbox annulée.');
   if (!saved || saved.state !== params.get('state')) throw new Error('Réponse Dropbox invalide, recommence la connexion.');
