@@ -161,6 +161,39 @@ export function applyHistory(carnet, history) {
   return summary;
 }
 
+const frenchDate = (iso) => iso.split('-').reverse().join('/');
+const ALERT_HISTORY_LINES = 8;
+
+/** La question préparée pour Claude. Ni plaque ni numéro de série : seulement ce qui aide à répondre. */
+export function buildAlertPrompt(carnet, { title, days, km }, today) {
+  const v = carnet.vehicle;
+  const stats = kmStats(carnet, today);
+  const delay = [days != null ? `${days} jours` : null, km != null ? `${km} km` : null].filter(Boolean).join(' ou ');
+  const vehicle = [
+    [v.marque, v.modele].filter(Boolean).join(' '),
+    v.cylindree && `${v.cylindree} cm3`,
+    v.energie,
+    v.puissance && `${v.puissance} kW`,
+    v.boite && `boîte ${v.boite}`,
+    v.miseEnCirculation && `mise en circulation le ${frenchDate(v.miseEnCirculation)}`,
+  ].filter(Boolean).join(', ');
+  const history = carnet.operations
+    .flatMap((op) => (op.history || []).map((entry) => ({ ...entry, title: op.title })))
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, ALERT_HISTORY_LINES)
+    .map((e) => `- ${frenchDate(e.date)}${e.km != null ? `, ${e.km} km` : ''} : ${e.title}${e.note ? ` (${e.note})` : ''}`);
+
+  return [
+    `Ma voiture affiche cette alerte : « ${title} »${delay ? `, dans ${delay}` : ''}.`,
+    `Véhicule : ${vehicle}.`,
+    `Kilométrage : environ ${stats.km} km, à environ ${stats.perMonth} km par mois.`,
+    ...(history.length ? ['Derniers entretiens connus :', ...history] : []),
+    'Explique-moi ce que signifie cette alerte, son degré d’urgence, ce que je dois demander au garage et un ordre de prix en France. Précise ce dont tu n’es pas sûr.',
+  ].join('\n');
+}
+
+export const claudeChatUrl = (prompt) => `https://claude.ai/new?q=${encodeURIComponent(prompt)}`;
+
 export function applyDone(op, { date, km, note }) {
   op.history = op.history || [];
   op.history.push({ date, km: km ?? null, note: note || '' });

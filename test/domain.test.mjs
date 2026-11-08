@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addMonths, addDays, applyDone, applyHistory, buildDueIcs, buildIcs, calendarFeedUrl, createCarnet, forecast, kmStats, nextDue, parseDashboard, parseInvoice, spendPlan, spentByYear, upgradeCarnet } from '../js/domain.js';
+import { addMonths, addDays, applyDone, applyHistory, buildAlertPrompt, buildDueIcs, buildIcs, calendarFeedUrl, claudeChatUrl, createCarnet, forecast, kmStats, nextDue, parseDashboard, parseInvoice, spendPlan, spentByYear, upgradeCarnet } from '../js/domain.js';
 import { GUIDE } from '../js/guide.js';
 
 const today = '2026-11-08';
@@ -112,6 +112,25 @@ test('le lien Dropbox devient une adresse d’abonnement', () => {
     calendarFeedUrl('https://www.dropbox.com/scl/fi/abc/echeances.ics?rlkey=xyz&dl=0'),
     'webcal://www.dropbox.com/scl/fi/abc/echeances.ics?rlkey=xyz&dl=1',
   );
+});
+
+test('la question pour Claude donne le contexte sans identifiant personnel', () => {
+  const c = carnet();
+  c.vehicle.immatriculation = 'AB-123-CD';
+  c.vehicle.vin = 'VIN12345678901234';
+  applyHistory(c, HISTORY);
+  const prompt = buildAlertPrompt(c, { title: 'Service d’entretien', days: 16, km: 12900 }, today);
+  assert.match(prompt, /« Service d’entretien », dans 16 jours ou 12900 km/);
+  assert.match(prompt, /18\/06\/2024, 85000 km : Liquide de frein \(Vidange\)/);
+  assert.doesNotMatch(prompt, /AB-123-CD|VIN1234/);
+});
+
+test('la question ne mentionne que le délai renseigné', () => {
+  assert.match(buildAlertPrompt(carnet(), { title: 'Pneus', days: 5, km: null }, today), /« Pneus », dans 5 jours\./);
+});
+
+test('le lien vers Claude encode la question', () => {
+  assert.equal(claudeChatUrl('a b & c'), 'https://claude.ai/new?q=a%20b%20%26%20c');
 });
 
 test('le service suit la date affichée par le tableau de bord', () => {
