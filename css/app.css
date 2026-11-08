@@ -17,32 +17,41 @@
   font-display: swap;
 }
 
+/* Ronzino, Collletttivo, licence SIL OFL 1.1 (voir fonts/OFL-Ronzino.txt). Pour les titres. */
+@font-face {
+  font-family: "Ronzino";
+  src: url("../fonts/Ronzino-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Ronzino";
+  src: url("../fonts/Ronzino-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --paper: #f6f4ef;
   --ink: #141414;
   --muted: #5f5c55;
   --faint: #8a877f;
+  --coral: #ff7a6b;
+  --late: #e0602f;
+  --soon: #c98a12;
   --citron: #e6ec5a;
   --poudre: #f2c6d3;
   --on-color: #141414;
   --cobalt: #2e4bd6;
   --on-cobalt: #ffffff;
-  --rule: 2px solid var(--ink);
+  --rule: 1px solid var(--ink);
   --hair: 1px solid var(--ink);
   --gut: 18px;
   --font: "Apfel Grotezk", system-ui, sans-serif;
+  --font-title: "Ronzino", "Apfel Grotezk", system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #141414;
-    --ink: #f2f0ea;
-    --muted: #b0aca3;
-    --faint: #7d7a73;
-    --cobalt: #3f5be6;
-  }
-}
 
 * { box-sizing: border-box; }
 
@@ -53,6 +62,7 @@ body {
   background: var(--paper);
   color: var(--ink);
   font: 400 16px/1.4 var(--font);
+  letter-spacing: 0;
   padding: env(safe-area-inset-top) 0 0;
 }
 
@@ -63,15 +73,19 @@ button, input, select, textarea { font-family: inherit; }
   margin: 0 auto;
   padding: 0 0 calc(92px + env(safe-area-inset-bottom));
 }
+/* Une page qui finit par une barre d'action ou des cartes les pose juste au-dessus des onglets (57 px). */
+#app:has(> :is(.bar, .stack):last-child) { padding-bottom: calc(57px + env(safe-area-inset-bottom)); }
 @media (min-width: 680px) {
   #app { border-inline: var(--rule); min-height: 100dvh; }
 }
 
 /* Tout ce qui n'est pas bord à bord garde une gouttière. */
 #app > * { margin-inline: var(--gut); }
-#app > :is(h1, h2, .topbar, .hero, .blocks, .list, .card, .bar, .line) { margin-inline: 0; }
+#app > :is(h1, h2, .topbar, .hero, .tl-wrap, .stack, .spend, .list, .card, .bar, .line) { margin-inline: 0; }
 
 /* --- Typographie --------------------------------------------------------- */
+
+h1, h2, h3, h4, .line-title, .row-title, .block-head > :first-child { font-family: var(--font-title); }
 
 h1 {
   margin: 0;
@@ -80,7 +94,6 @@ h1 {
   font-size: 56px;
   font-weight: 400;
   line-height: 1;
-  letter-spacing: -0.04em;
 }
 h2 {
   margin: 0;
@@ -88,11 +101,10 @@ h2 {
   border-top: var(--rule);
   font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0;
   text-transform: none;
   color: var(--ink);
 }
-h3 { font-size: 30px; font-weight: 400; letter-spacing: -0.03em; line-height: 1.05; margin: 0 0 12px; padding-right: 48px; }
+h3 { font-size: 30px; font-weight: 400; line-height: 1.05; margin: 0 0 12px; padding-right: 48px; }
 p { margin: 8px 0; }
 a { color: var(--ink); text-underline-offset: 3px; }
 strong { font-weight: 700; }
@@ -110,17 +122,98 @@ strong { font-weight: 700; }
   padding: 10px var(--gut);
 }
 .topbar h1 { border: 0; padding: 0; }
+.topbar .pill { font-size: 20px; }
 
 .hero { padding: 8px var(--gut) 14px; border-top: var(--rule); }
 .hero-label { margin: 0; font-size: 13px; }
 .hero-value {
   margin: 0;
-  font-size: clamp(64px, 22vw, 96px);
+  font-size: clamp(56px, 19vw, 96px);
   line-height: 1;
-  letter-spacing: -0.045em;
   font-variant-numeric: tabular-nums;
 }
-.hero-value span { font-size: 20px; letter-spacing: 0; margin-left: 8px; }
+.hero-figure { display: flex; align-items: flex-end; gap: 4px; }
+/* Le padding cale « km » sur la ligne de base du grand chiffre. */
+.hero-unit { display: flex; flex-direction: column; align-items: center; padding-bottom: 7px; font-size: 20px; line-height: 1; }
+
+/* --- Timeline du kilométrage ---------------------------------------------- */
+
+/* Une règle qui défile sous un repère fixe. Hauteurs : 26 (chiffres) + 20 (dépassement
+   du repère) + 50 (tirets) + 20 (dépassement) ; le repère fait 90 px. --at et --lane
+   sont posées par render(), --x (position du kilométrage actuel) par setupTimeline(). */
+.tl-wrap { position: relative; margin-top: 16px; }
+#app > .alert-button { margin: 24px auto 1px; }
+.alert-button {
+  display: flex;
+  width: fit-content;
+  border-color: var(--coral);
+  background: var(--coral);
+  color: var(--ink);
+}
+.alert-button + .stack { margin-top: 0; }
+.tl-scroll { padding-inline: 50%; overflow-x: auto; scrollbar-width: none; }
+.tl-scroll::-webkit-scrollbar { display: none; }
+.tl-scale { position: relative; height: 26px; margin-bottom: 20px; font-size: 13px; line-height: 26px; white-space: nowrap; }
+.tl-scale span { position: absolute; left: var(--at); transform: translateX(-50%); }
+.tl-track { position: relative; height: 50px; }
+.tl-past, .tl-future { position: absolute; top: 0; bottom: 0; }
+.tl-past {
+  left: 0;
+  width: calc(var(--at) + 2px);
+  background: repeating-linear-gradient(90deg, var(--ink) 0 2px, transparent 2px 6px);
+}
+.tl-future {
+  left: var(--at);
+  right: 0;
+  background: repeating-linear-gradient(90deg, var(--faint) 0 1px, transparent 1px 6px);
+}
+.tl-event { position: absolute; left: var(--at); top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--cobalt); }
+.tl-event.retard { background: var(--late); }
+.tl-event.bientot { background: var(--soon); }
+.tl-needle { position: absolute; left: calc(50% - 1px); top: 26px; width: 2px; height: 90px; background: var(--ink); pointer-events: none; }
+.tl-read, .tl-current {
+  position: absolute;
+  top: 0;
+  padding-inline: 6px;
+  background: var(--paper);
+  line-height: 26px;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.tl-read { left: 50%; color: var(--faint); font-size: 14px; }
+.tl-read.is-current, .tl-current { color: var(--ink); font-size: 20px; }
+.tl-current { left: var(--x); }
+.tl-current.is-off { visibility: hidden; }
+.tl-nums { position: relative; min-height: 26px; height: calc(var(--lane) * 30px); margin-top: 6px; }
+.tl-nums button {
+  position: absolute;
+  left: var(--at);
+  top: calc(var(--lane) * 30px);
+  width: 24px;
+  min-height: 24px;
+  height: 24px;
+  margin-left: -12px;
+  padding: 0;
+  background: var(--paper);
+  font-size: 13px;
+}
+.tl-nums button::after { content: ""; position: absolute; inset: -3px; }
+
+/* Le même numéro, sur la carte de l'entretien. */
+.num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-family: var(--font);
+  font-size: 13px;
+  vertical-align: 0.15em;
+}
 
 /* --- Pilules -------------------------------------------------------------- */
 
@@ -169,9 +262,8 @@ strong { font-weight: 700; }
 .line { flex-direction: column; align-items: stretch; gap: 6px; }
 .line-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .line-title {
-  font-size: 34px;
-  line-height: 1.05;
-  letter-spacing: -0.035em;
+  font-size: 20px;
+  line-height: 1.1;
   overflow-wrap: anywhere;
 }
 .line.is-done { color: var(--muted); }
@@ -181,23 +273,11 @@ strong { font-weight: 700; }
 .row { justify-content: space-between; align-items: center; gap: 12px; }
 div.row { cursor: default; }
 .row-main { min-width: 0; }
-.row-title { font-size: 22px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.row-title { font-size: 22px; overflow-wrap: anywhere; }
 .row-side { text-align: right; flex: none; }
-.row-side strong { font-size: 22px; font-weight: 400; letter-spacing: -0.02em; }
+.row-side strong { font-size: 22px; font-weight: 400; }
 
 /* --- Blocs ---------------------------------------------------------------- */
-
-.blocks {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  border-top: var(--rule);
-}
-.blocks > :first-child:nth-last-child(odd) { grid-column: span 2; min-height: 168px; }
-.blocks > :first-child:nth-last-child(odd) .block-value { font-size: clamp(56px, 20vw, 84px); }
-.blocks > :nth-child(n + 2) { border-top: var(--rule); }
-.blocks > :first-child:nth-last-child(even) + * { border-top: 0; }
-.blocks > :first-child:nth-last-child(even),
-.blocks > :first-child:nth-last-child(odd) ~ :nth-child(even) { border-right: var(--rule); }
 
 .block {
   display: flex;
@@ -221,17 +301,43 @@ div.row { cursor: default; }
 .block-value {
   font-size: 52px;
   line-height: 0.9;
-  letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .block-value.long { font-size: 36px; }
-.blocks > :first-child:nth-last-child(odd) .block-value.long { font-size: clamp(44px, 14vw, 64px); }
 .block-sub { font-size: 13px; margin-top: -4px; }
 .block.retard { background: var(--ink); color: var(--paper); }
 .block.retard .pill { background: var(--paper); border-color: var(--paper); color: var(--ink); }
 .block.bientot { background: var(--citron); color: var(--on-color); }
 .block.rdv { background: var(--poudre); color: var(--on-color); }
+
+/* --- Cartes empilées (accueil) -------------------------------------------- */
+
+/* Chaque carte passe devant la précédente. Seule la marge basse est recouverte,
+   donc aucune information ne se retrouve cachée, quelle que soit la longueur du titre. */
+.stack {
+  --overlap: 30px;
+  margin-top: 48px;
+  margin-bottom: 32px;
+}
+.stack:has(+ .bar), .stack:last-child { margin-bottom: 0; }
+/* Sous un titre de section, la pile reste attachée à son titre. */
+:is(h1, h2, p) + .stack { margin-top: 12px; }
+.stack > * {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  padding: 14px var(--gut) calc(16px + var(--overlap));
+  border: 0;
+  box-shadow: 0 -6px 18px rgb(20 20 20 / .18);
+}
+.stack > :not(.retard, .bientot, .rdv) { background: var(--paper); }
+.stack > * + * { margin-top: calc(-1 * var(--overlap)); }
+.stack > :last-child { padding-bottom: 16px; }
+.stack .block-head { font-size: 26px; line-height: 1.1; }
+.stack .block { gap: 8px; }
+.stack .block-value, .stack .block-value.long { font-size: 48px; line-height: 1; }
+.stack .block-sub { margin-top: 0; }
 
 /* --- Boutons -------------------------------------------------------------- */
 
@@ -264,8 +370,11 @@ button.primary, .button.primary {
 }
 button.danger { border-color: var(--muted); color: var(--muted); }
 button.icon { width: 44px; min-height: 44px; padding: 0; flex: none; border: 0; }
-button.icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+button.emoji { font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; font-size: 30px; line-height: 1; }
 button:disabled { opacity: .45; cursor: default; }
+label.button { margin: 0; }
+label.button:focus-within { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; }
 button:focus-visible, .button:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
 .line:focus-visible, .row:focus-visible, .block:focus-visible { outline-offset: -4px; }
 
@@ -276,6 +385,7 @@ button:focus-visible, .button:focus-visible { outline: 3px solid var(--cobalt); 
 .bar { display: flex; border-top: var(--rule); border-bottom: var(--rule); }
 .bar > button { flex: 1; min-height: 60px; border-radius: 0; border: 0; justify-content: space-between; padding: 0 var(--gut); }
 .bar > button + button { border-left: var(--rule); }
+.bar:last-child { border-bottom: 0; }
 
 /* --- Cartes (réglages, budget, accueil) ---------------------------------- */
 
@@ -291,7 +401,6 @@ button:focus-visible, .button:focus-visible { outline: 3px solid var(--cobalt); 
   font-size: 44px;
   font-weight: 400;
   line-height: 1;
-  letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
 }
 .notice { background: var(--citron); color: var(--on-color); }
@@ -303,15 +412,16 @@ button:focus-visible, .button:focus-visible { outline: 3px solid var(--cobalt); 
   inset: auto 0 0 0;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  padding-bottom: env(safe-area-inset-bottom);
   background: var(--paper);
   border-top: var(--rule);
   z-index: 5;
 }
 #tabs[hidden] { display: none; }
+/* La zone de la barre d'accueil de l'iPhone fait partie du bouton : le fond de
+   l'onglet actif descend ainsi jusqu'au bord de l'écran. */
 #tabs button {
-  min-height: 56px;
-  padding: 4px 2px;
+  min-height: calc(56px + env(safe-area-inset-bottom));
+  padding: 4px 2px calc(4px + env(safe-area-inset-bottom));
   border: 0;
   border-radius: 0;
   background: none;
@@ -320,6 +430,42 @@ button:focus-visible, .button:focus-visible { outline: 3px solid var(--cobalt); 
 }
 #tabs button + button { border-left: var(--hair); }
 #tabs button[aria-current="page"] { background: var(--ink); color: var(--paper); }
+
+/* --- Dépenses par année --------------------------------------------------- */
+
+/* Couleurs validées contre le fond papier (écart daltonisme et contraste). */
+.spend { --spent: var(--cobalt); --planned: #e0602f; padding: 4px var(--gut) 12px; }
+.spend-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; }
+.spend-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.spend-key { width: 10px; height: 10px; border-radius: 2px; }
+.spend-key.done, .spend-seg.done { background: var(--spent); }
+.spend-key.todo, .spend-seg.todo { background: var(--planned); }
+.spend-bars { display: flex; margin-top: 8px; border-bottom: var(--hair); }
+.spend-col {
+  flex: 1 1 0;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  font-size: 12px;
+}
+.spend-plot {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px;
+  height: 160px;
+}
+.spend-value { white-space: nowrap; }
+.spend-seg { width: 28px; height: var(--h); }
+.spend-value + .spend-seg { border-radius: 4px 4px 0 0; }
+.spend-col:hover .spend-seg { filter: brightness(.9); }
+.spend-year { display: block; margin: 4px 2px; padding: 3px 0; border-radius: 999px; line-height: 1; text-align: center; }
+.spend-col[aria-pressed="true"] .spend-year { background: var(--ink); color: var(--paper); }
+.spend > p { margin: 10px 0 0; }
 
 /* --- Fenêtres et formulaires --------------------------------------------- */
 
@@ -372,7 +518,7 @@ legend { font-size: 14px; font-weight: 700; padding: 0; }
 /* --- Agenda ---------------------------------------------------------------- */
 
 .month-nav { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
-.month-nav strong { font-size: 26px; font-weight: 400; letter-spacing: -0.03em; text-transform: capitalize; }
+.month-nav strong { font-size: 26px; font-weight: 400; text-transform: capitalize; }
 .month-nav button.icon { border: var(--hair); font-size: 22px; }
 .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-top: 10px; }
 .dow { text-align: center; color: var(--muted); font-size: 12px; padding: 4px 0; }
@@ -399,7 +545,7 @@ legend { font-size: 14px; font-weight: 700; padding: 0; }
 
 h4 { font-size: 13px; font-weight: 700; margin: 24px 0 6px; padding-top: 10px; border-top: var(--rule); }
 .guide { border-top: var(--hair); padding: 10px 0; }
-.guide summary { min-height: 44px; display: flex; align-items: center; font-size: 20px; letter-spacing: -0.02em; cursor: pointer; }
+.guide summary { min-height: 44px; display: flex; align-items: center; font-size: 20px; cursor: pointer; }
 .guide .badge { margin-top: 4px; }
 .guide ul { margin: 8px 0; padding-left: 20px; }
 .guide li { margin: 6px 0; }

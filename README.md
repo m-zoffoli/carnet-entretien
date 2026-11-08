@@ -23,4 +23,8 @@ python3 -m http.server 4173
 
 ## Police
 
-L'interface est composée en Apfel Grotezk (Collletttivo, licence SIL OFL 1.1), hébergée dans `fonts/` : Regular pour les chiffres et les lignes, Fett pour les petits libellés.
+L'interface est composée en Apfel Grotezk (Collletttivo, licence SIL OFL 1.1), hébergée dans `fonts/` : Regular pour les chiffres et les lignes, Fett pour les petits libellés. Les titres sont en Ronzino (Collletttivo, licence SIL OFL 1.1), hébergée au même endroit.
+
+## Lecture des photos
+
+Les photos du tableau de bord et des factures sont lues sur l'appareil par Tesseract.js (licence Apache 2.0), hébergé dans `vendor/tesseract/` : aucune image n'est envoyée à un service extérieur.

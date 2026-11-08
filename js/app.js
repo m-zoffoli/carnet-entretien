@@ -1,10 +1,11 @@
 import {
-  addDays, applyDone, buildIcs, createCarnet, diffDays, forecast, fromISO, kmStats, nextDue,
-  sortedOperations, spentByYear, toISO, uid, upgradeCarnet,
+  addDays, applyDone, applyHistory, buildDueIcs, buildIcs, calendarFeedUrl, createCarnet, diffDays, forecast, fromISO, kmStats, nextDue,
+  parseDashboard, parseInvoice, priceOf, sortedOperations, spendPlan, spentByYear, toISO, uid, upgradeCarnet,
 } from './domain.js';
 import { GUIDE } from './guide.js';
+import { readPhotoText } from './ocr.js';
 import {
-  ConflictError, DropboxStore, LocalStore, beginDropboxAuth, completeDropboxAuth, disconnectDropbox,
+  CALENDAR_SCOPE, ConflictError, DropboxStore, LocalStore, MissingScopeError, beginDropboxAuth, completeDropboxAuth, disconnectDropbox,
   dropboxConfigured, getFolder, getMode, isConnected, setFolder, setMode,
 } from './store.js';
 
@@ -92,7 +93,6 @@ function closeModal() {
 // --- Vues --------------------------------------------------------------------
 
 const ARROW = '<svg class="arrow" viewBox="0 0 56 40" aria-hidden="true"><path d="M2 20h50M34 3l18 17-18 17"/></svg>';
-const GEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>';
 const pill = (text, kind = '') => `<span class="pill ${kind}">${h(text)}</span>`;
 
 /** Le délai restant, en jours ou en kilomètres selon l'axe qui décide l'échéance. */
@@ -117,15 +117,19 @@ function opPills(due) {
   return out.join('');
 }
 
-const opRow = ({ op, due }) => `
-  <button class="line ${due.status === 'fait' ? 'is-done' : ''}" data-action="op" data-id="${h(op.id)}">
-    <span class="line-head"><span class="line-title">${h(op.title)}</span>${ARROW}</span>
+// num : le numéro de l'échéance sur la timeline, seulement sur l'accueil.
+const numAnchor = (op, num) => (num ? `id="op-${h(op.id)}"` : '');
+const numBadge = (num) => (num ? `<span class="num">${num}</span>` : '');
+
+const opRow = ({ op, due, num }) => `
+  <button ${numAnchor(op, num)} class="line ${due.status === 'fait' ? 'is-done' : ''}" data-action="op" data-id="${h(op.id)}">
+    <span class="line-head"><span class="line-title">${numBadge(num)}${h(op.title)}</span>${ARROW}</span>
     <span class="pills">${opPills(due)}</span>
   </button>`;
 
-const opBlock = ({ op, due }) => `
-  <button class="block ${due.status}" data-action="op" data-id="${h(op.id)}">
-    <span class="block-head"><span>${h(op.title)}</span>${due.status === 'retard' ? pill('En retard') : ''}</span>
+const opBlock = ({ op, due, num }) => `
+  <button ${numAnchor(op, num)} class="block ${due.status}" data-action="op" data-id="${h(op.id)}">
+    <span class="block-head"><span>${numBadge(num)}${h(op.title)}</span>${due.status === 'retard' ? pill('En retard') : ''}</span>
     <span class="block-value ${delay(due).length > 5 ? 'long' : ''}">${h(delay(due))}</span>
     <span class="block-sub">${h(dueText(due))}</span>
   </button>`;
@@ -148,49 +152,142 @@ const apptBlock = (a) => `
 const upcomingAppts = (c) =>
   c.appointments.filter((a) => a.date >= today()).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 
+// Estimation généreuse pour un 2.0 TDI bien entretenu, pas une donnée constructeur.
+const LIFE_KM = 300000;
+
+const SCALE_STEP_KM = 50000;
+const TICK_STEP_KM = 500;
+const TICK_STEP_PX = 6; // doit rester égal au pas des dégradés .tl-past et .tl-future
+const NUM_GAP_PX = 30; // écart minimal entre deux numéros
+const roundKm = (n) => Math.ceil(n / 100) * 100;
+const trackWidth = (end) => (end / TICK_STEP_KM) * TICK_STEP_PX;
+
+/** Une règle de tirets sur la durée de vie espérée. items : les entretiens au kilométrage, numérotés et triés. */
+function kmTimeline(items, km) {
+  const end = Math.max(LIFE_KM, km, ...items.map((x) => x.due.km));
+  const at = (n) => Math.round((Math.max(n, 0) / end) * 100000) / 1000;
+  const numGap = (NUM_GAP_PX / trackWidth(end)) * 100;
+
+  const scale = [];
+  for (let n = 0; n <= end; n += SCALE_STEP_KM) scale.push(n);
+
+  // Le dernier tiret passé : les tirets restent ainsi alignés sur leur pas de 500 km.
+  const lastTick = Math.floor(km / TICK_STEP_KM) * TICK_STEP_KM;
+
+  // Deux échéances proches : le second numéro descend d'un rang au lieu de chevaucher le premier.
+  const laneEnds = [];
+  const placed = items.map((item) => {
+    const x = at(item.due.km);
+    let lane = laneEnds.findIndex((last) => x - last >= numGap);
+    if (lane === -1) lane = laneEnds.length;
+    laneEnds[lane] = x;
+    return { ...item, x, lane };
+  });
+
+  return `
+    <div class="tl-wrap" data-km="${km}" data-end="${end}">
+      <div class="tl-scroll">
+        <div class="tl">
+          <div class="tl-scale">${scale.map((n) => `<span data-at="${at(n)}">${fmtNum(n)}</span>`).join('')}</div>
+          <div class="tl-track">
+            <span class="tl-past" data-at="${at(lastTick)}"></span>
+            <span class="tl-future" data-at="${at(lastTick + TICK_STEP_KM)}"></span>
+            ${placed.map(({ due, x }) => `<span class="tl-event ${due.status}" data-at="${x}"></span>`).join('')}
+          </div>
+          <div class="tl-nums" data-lane="${laneEnds.length}">
+            ${placed.map(({ op, num, x, lane }) => `<button data-action="jump" data-id="${h(op.id)}" data-at="${x}" data-lane="${lane}" aria-label="Voir ${h(op.title)}">${num}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+      <span class="tl-needle" aria-hidden="true"></span>
+      <span class="tl-read" aria-live="off"></span>
+      <span class="tl-current">${fmtKm(roundKm(km))}</span>
+    </div>`;
+}
+
+/** Centre la règle sur le kilométrage actuel, puis met à jour les chiffres au défilement. */
+function setupTimeline() {
+  const wrap = root.querySelector('.tl-wrap');
+  if (!wrap) return;
+  const km = Number(wrap.dataset.km);
+  const end = Number(wrap.dataset.end);
+  const width = trackWidth(end);
+  const scroller = wrap.querySelector('.tl-scroll');
+  const read = wrap.querySelector('.tl-read');
+  const current = wrap.querySelector('.tl-current');
+  const kmX = (km / end) * width;
+
+  const update = () => {
+    const offset = kmX - scroller.scrollLeft;
+    const onCurrent = Math.abs(offset) < 2;
+    read.classList.toggle('is-current', onCurrent);
+    read.textContent = fmtKm(onCurrent ? roundKm(km) : Math.round((scroller.scrollLeft / width) * end / 100) * 100);
+
+    // Le kilométrage actuel suit la règle, puis reste au bord de l'écran.
+    const half = current.offsetWidth / 2;
+    const center = wrap.clientWidth / 2;
+    const x = Math.min(Math.max(center + offset, half), wrap.clientWidth - half);
+    current.style.setProperty('--x', `${x}px`);
+    current.classList.toggle('is-off', Math.abs(x - center) < half + read.offsetWidth / 2 + 8);
+  };
+
+  wrap.querySelector('.tl').style.width = `${width}px`;
+  scroller.scrollLeft = kmX;
+  scroller.addEventListener('scroll', update, { passive: true });
+  update();
+}
+
 function viewHome() {
   const c = S.carnet;
   const t = today();
   const stats = kmStats(c, t);
   const ops = sortedOperations(c, t);
-  const urgent = ops.filter((x) => x.due.status === 'retard' || x.due.status === 'bientot');
-  const next = ops.filter((x) => x.due.status === 'ok').slice(0, 3);
+  const late = ops.filter((x) => x.due.status === 'retard');
+  const soon = ops.filter((x) => x.due.status === 'bientot');
+  // Chaque numéro de la timeline doit avoir sa carte : on garde tous les entretiens au kilométrage.
+  const next = ops.filter((x) => x.due.status === 'ok').filter((x, i) => i < 3 || x.due.km != null);
+  const kmItems = ops.filter((x) => x.due.km != null).sort((a, b) => a.due.km - b.due.km);
+  kmItems.forEach((x, i) => { x.num = i + 1; });
   const appts = upcomingAppts(c).slice(0, 3);
   const f = forecast(c, t);
   const spent = spentByYear(c).find(([y]) => y === t.slice(0, 4))?.[1] || 0;
   const name = [c.vehicle.marque, c.vehicle.modele].filter(Boolean).join(' ') || 'Ma voiture';
 
-  // Trois blocs au plus : les urgences d'abord, puis le prochain rendez-vous s'il reste de la place.
-  const blocks = urgent.slice(0, 3).map(opBlock);
-  const apptInBlock = blocks.length < 3 && appts.length > 0;
-  if (apptInBlock) blocks.push(apptBlock(appts[0]));
-  const lines = [
-    ...urgent.slice(3).map(opRow),
-    ...appts.slice(apptInBlock ? 1 : 0).map(apptRow),
+  // Les retards d'abord, puis les urgences, les rendez-vous et les prochains entretiens.
+  const cards = [
+    ...late.map(opBlock),
+    ...soon.map(opBlock),
+    ...appts.slice(0, 1).map(apptBlock),
+    ...appts.slice(1).map(apptRow),
     ...next.map(opRow),
   ];
 
   return `
     <div class="topbar">
       ${pill(name)}
-      <button class="icon" data-action="go" data-view="vehicle" aria-label="Véhicule et réglages">${GEAR}</button>
+      <button class="icon emoji" data-action="go" data-view="vehicle" aria-label="Véhicule et réglages"><span aria-hidden="true">🚗</span></button>
     </div>
     <div class="hero">
-      <p class="hero-label">Kilométrage${stats.lastDate ? ` · relevé le ${h(fmtShort(stats.lastDate))}` : ''}</p>
-      <p class="hero-value">${fmtNum(stats.km)}<span>km</span></p>
-      ${stats.perYear ? `<p class="hero-label">Environ ${fmtKm(stats.perYear)} par an</p>` : ''}
+      <p class="hero-label">Kilométrage</p>
+      <div class="hero-figure">
+        <p class="hero-value">${fmtNum(roundKm(stats.km))}</p>
+        <div class="hero-unit">
+          <button class="icon emoji" data-action="km" aria-label="Noter le kilométrage"><span aria-hidden="true">🖋️</span></button>
+          <span>km</span>
+        </div>
+      </div>
+      <p class="hero-label">Dernier relevé : ${fmtKm(stats.lastKm)}${stats.lastDate ? ` le ${h(fmtShort(stats.lastDate))}` : ''}</p>
+      ${stats.monthsEstimated ? `<p class="hero-label">Estimé depuis ${stats.monthsEstimated} mois : +${fmtKm(stats.km - stats.lastKm)}</p>` : ''}
+      ${stats.perYear ? `<p class="hero-label">Environ ${fmtKm(stats.perMonth)} par mois</p>` : ''}
     </div>
-    ${blocks.length ? `<div class="blocks">${blocks.join('')}</div>` : ''}
-    <div class="list">
-      ${lines.join('')}
+    ${kmTimeline(kmItems, stats.km)}
+    <button class="alert-button" data-action="alert">Message d’alerte <span aria-hidden="true">+</span></button>
+    <div class="stack">
+      ${cards.join('')}
       <button class="line" data-action="go" data-view="budget">
         <span class="line-head"><span class="line-title">${fmtEur(spent)} en ${t.slice(0, 4)}</span>${ARROW}</span>
         <span class="pills">${pill(f.max ? `${budgetRange(f)} prévus sur 12 mois` : 'Prévisions à chiffrer')}</span>
       </button>
-    </div>
-    <div class="bar">
-      <button class="primary" data-action="km">Noter le km <span aria-hidden="true">+</span></button>
-      <button data-action="go" data-view="calendar">Agenda</button>
     </div>`;
 }
 
@@ -255,13 +352,13 @@ function viewMaintenance() {
   const done = ops.filter((x) => x.due.status === 'fait');
   return `
     <h1>Entretien</h1>
-    ${urgent.length ? `<div class="blocks">${urgent.map(opBlock).join('')}</div>` : ''}
-    <h2>Échéances</h2>
-    <div class="list">${later.map(opRow).join('')}</div>
-    ${!dated.length ? '<p class="muted">Aucune échéance.</p>' : ''}
-    ${unknown.length ? `<h2>À confirmer</h2><p class="muted small">Renseigne leur intervalle depuis le plan d’entretien, une facture ou le garage.</p><div class="list">${unknown.map(opRow).join('')}</div>` : ''}
-    ${done.length ? `<h2>Faits</h2><div class="list">${done.map(opRow).join('')}</div>` : ''}
-    <div class="bar"><button class="primary" data-action="edit-op">Ajouter une opération <span aria-hidden="true">+</span></button></div>`;
+    ${dated.length ? `<div class="stack">${urgent.map(opBlock).join('')}${later.map(opRow).join('')}</div>` : '<p class="muted">Aucune échéance.</p>'}
+    ${unknown.length ? `<h2>À confirmer</h2><p class="muted small">Renseigne leur intervalle depuis le plan d’entretien, une facture ou le garage.</p><div class="stack">${unknown.map(opRow).join('')}</div>` : ''}
+    ${done.length ? `<h2>Faits</h2><div class="stack">${done.map(opRow).join('')}</div>` : ''}
+    <div class="bar">
+      <button class="primary" data-action="edit-op">Ajouter une opération <span aria-hidden="true">+</span></button>
+      <button data-action="reminders">Recevoir des rappels</button>
+    </div>`;
 }
 
 function viewInvoices() {
@@ -280,6 +377,64 @@ function viewInvoices() {
     ${rows ? `<h2>${list.length} facture${list.length > 1 ? 's' : ''}</h2><div class="list">${rows}</div>` : '<p class="muted">Aucune facture pour l’instant. Ajoute une photo ou un PDF.</p>'}`;
 }
 
+const PAST_YEARS = 2;
+const FUTURE_YEARS = 3;
+// La plus haute barre s'arrête à 80 % : le montant tient au-dessus.
+const BAR_MAX = 80;
+const roundTen = (n) => Math.round(n / 10) * 10;
+
+/** Par année : ce qui est payé (factures) et ce qui reste à faire (milieu de la fourchette estimée). */
+function spendChart(c, t) {
+  const thisYear = Number(t.slice(0, 4));
+  const plan = spendPlan(c, t, thisYear + FUTURE_YEARS);
+  const spent = new Map(spentByYear(c));
+  const first = Math.max(thisYear - PAST_YEARS, Math.min(thisYear, ...[...spent.keys()].map(Number)));
+
+  const rows = [];
+  for (let y = first; y <= thisYear + FUTURE_YEARS; y += 1) {
+    const year = String(y);
+    const planned = plan.years.find((p) => p.year === year);
+    rows.push({ year, planned, done: spent.get(year) || 0, todo: planned ? roundTen((planned.min + planned.max) / 2) : 0 });
+  }
+  const top = Math.max(1, ...rows.map((r) => r.done + r.todo));
+  const height = (v) => Math.max(1, Math.round((v / top) * BAR_MAX));
+  const seg = (kind, v) => (v ? `<span class="spend-seg ${kind}" data-h="${height(v)}"></span>` : '');
+
+  const selected = rows.find((r) => r.year === S.budgetYear) || rows.find((r) => r.year === String(thisYear));
+  const invoices = c.invoices.filter((inv) => inv.date.startsWith(selected.year) && inv.amount != null);
+
+  return `
+    <h2>Dépenses faites et à faire</h2>
+    <div class="spend">
+      <div class="spend-legend">
+        <span><i class="spend-key done"></i>Faites</span>
+        <span><i class="spend-key todo"></i>À faire (estimation)</span>
+      </div>
+      <div class="spend-bars">
+        ${rows.map((r) => `
+          <button class="spend-col" data-action="budget-year" data-year="${r.year}" aria-pressed="${r === selected}" aria-label="${r.year} : ${fmtEur(r.done)} faites, environ ${fmtEur(r.todo)} à faire">
+            <span class="spend-plot">
+              <span class="spend-value">${fmtEur(r.done + r.todo)}</span>
+              ${seg('todo', r.todo)}${seg('done', r.done)}
+            </span>
+            <span class="spend-year">${r.year}</span>
+          </button>`).join('')}
+      </div>
+      ${plan.undated.count ? `<p class="muted small">Non comptés : ${plan.undated.count} entretiens sans date, environ ${budgetRange(plan.undated)} en tout. Renseigne leur dernière date dans Entretien pour les ajouter.</p>` : ''}
+      ${plan.unpriced ? `<p class="muted small">${plan.unpriced} opération${plan.unpriced > 1 ? 's' : ''} datée${plan.unpriced > 1 ? 's' : ''} sans prix de référence, à chiffrer.</p>` : ''}
+    </div>
+    <h2>Détail ${selected.year}</h2>
+    <div class="list">
+      ${invoices.map((inv) => `<div class="row"><span class="row-main"><span class="row-title">${h(inv.title)}</span><br><span class="muted small">Facture du ${h(fmtDate(inv.date))}</span></span><span class="row-side"><strong>${fmtEur(inv.amount)}</strong></span></div>`).join('')}
+      ${(selected.planned?.items || []).map(({ op, date, min, max }) => `
+        <button class="row" data-action="op" data-id="${h(op.id)}">
+          <span class="row-main"><span class="row-title">${h(op.title)}</span><br><span class="muted small">Vers ${h(fmtDate(date))}</span></span>
+          <span class="row-side"><strong>${budgetRange({ min, max })}</strong></span>
+        </button>`).join('')}
+      ${invoices.length || selected.planned ? '' : '<p class="card">Rien de prévu cette année.</p>'}
+    </div>`;
+}
+
 function viewBudget() {
   const c = S.carnet;
   const f = forecast(c, today());
@@ -287,24 +442,22 @@ function viewBudget() {
   const rows = f.items.map(({ op, due }) => `
     <button class="row" data-action="op" data-id="${h(op.id)}">
       <span class="row-main"><span class="row-title">${h(op.title)}</span><br><span class="muted small">${h(dueText(due))}</span></span>
-      <span class="row-side">${op.costMin != null || op.costMax != null ? `<strong>${h(costText(op))}</strong>` : '<span class="badge">À chiffrer</span>'}</span>
+      <span class="row-side">${priceOf(op) ? `<strong>${h(costText(op))}</strong>` : '<span class="badge">À chiffrer</span>'}</span>
     </button>`).join('');
   return `
     <h1>Budget</h1>
     <div class="card">
       <div class="stat">${f.max ? budgetRange(f) : 'À chiffrer'}</div>
-      <p class="muted small">Prévu sur les 12 prochains mois${f.unpriced ? `, sans compter ${f.unpriced} opération${f.unpriced > 1 ? 's' : ''} à chiffrer` : ''}. Ces montants sont les estimations que tu as saisies.</p>
+      <p class="muted small">Prévu sur les 12 prochains mois${f.unpriced ? `, sans compter ${f.unpriced} opération${f.unpriced > 1 ? 's' : ''} à chiffrer` : ''}. Estimations sur des prix de référence, remplacés par les coûts que tu saisis.</p>
     </div>
+    ${spendChart(c, today())}
     <h2>Prévisions à 12 mois</h2>
     <div class="list">${rows || '<p class="card">Aucune échéance à 12 mois.</p>'}</div>
     <h2>Dépenses par année</h2>
     ${years.length ? `<div class="list">${years.map(([y, v]) => `<div class="row"><span>${h(y)}</span><strong>${fmtEur(v)}</strong></div>`).join('')}</div>` : '<p class="muted">Les totaux apparaîtront avec tes factures.</p>'}`;
 }
 
-function costText(op) {
-  if (op.costMin != null && op.costMax != null && op.costMin !== op.costMax) return `${fmtEur(op.costMin)} à ${fmtEur(op.costMax)}`;
-  return fmtEur(op.costMax ?? op.costMin);
-}
+const costText = (op) => budgetRange(priceOf(op));
 
 function viewVehicle() {
   const v = S.carnet.vehicle;
@@ -339,12 +492,14 @@ function viewVehicle() {
       <${r.photo ? 'button data-action="reading-photo" data-id="' + h(r.id) + '"' : 'div'} class="row">
         <span>${h(fmtDate(r.date))}</span><strong>${fmtKm(r.km)}</strong>
       </${r.photo ? 'button' : 'div'}>`).join('')}</div>
+    ${isDropbox ? calendarSection() : ''}
     <h2>Stockage</h2>
     <div class="card">
       <p><strong>${isDropbox ? 'Dropbox' : 'Sur cet appareil uniquement'}</strong>${isDropbox ? `<br><span class="muted small">Dossier ${h(S.store.folder)}</span>` : ''}</p>
       ${isDropbox ? `<form data-form="folder">${field('Dossier partagé', 'folder', S.store.folder, 'text', 'required pattern="/.+"')}<div class="actions"><button>Changer de dossier</button></div></form>` : '<p class="muted small">Ces données ne sont pas partagées avec un autre téléphone.</p>'}
       <div class="actions">
         <button data-action="export">Exporter le carnet</button>
+        <label class="button">Importer un historique<input class="visually-hidden" name="history" type="file" accept="application/json,.json"></label>
         ${isDropbox ? '<button class="danger" data-action="disconnect">Déconnecter</button>' : `<button class="primary" data-action="connect" ${dropboxConfigured() ? '' : 'disabled'}>Connecter Dropbox</button>`}
       </div>
     </div>`;
@@ -389,6 +544,11 @@ const TABS = [['home', 'Accueil'], ['calendar', 'Agenda'], ['maintenance', 'Entr
 function render() {
   if (!S.carnet) return;
   root.innerHTML = VIEWS[S.view]();
+  // La politique de sécurité interdit les attributs style : les positions passent par le CSSOM.
+  root.querySelectorAll('[data-at]').forEach((el) => el.style.setProperty('--at', `${el.dataset.at}%`));
+  root.querySelectorAll('[data-h]').forEach((el) => el.style.setProperty('--h', `${el.dataset.h}%`));
+  root.querySelectorAll('[data-lane]').forEach((el) => el.style.setProperty('--lane', el.dataset.lane));
+  setupTimeline();
   tabs.hidden = false;
   tabs.innerHTML = TABS.map(([view, label]) => `<button data-action="go" data-view="${view}" ${S.view === view ? 'aria-current="page"' : ''}>${label}</button>`).join('');
 }
@@ -423,7 +583,7 @@ function opModal(id) {
     <p><strong>${h(dueText(due))}</strong></p>
     <p>${h(op.description)}</p>
     ${op.note ? `<p class="muted">${h(op.note)}</p>` : ''}
-    ${op.costMin != null || op.costMax != null ? `<p>Estimation : <strong>${h(costText(op))}</strong></p>` : ''}
+    ${priceOf(op) ? `<p>Estimation : <strong>${h(costText(op))}</strong>${priceOf(op).reference ? ' (prix de référence)' : ''}</p>` : ''}
     ${source ? `<p class="small"><span class="badge">${h(LEVEL[source.level])}</span><br>${source.url ? `<a href="${h(source.url)}" target="_blank" rel="noopener noreferrer">${h(source.label)}</a>` : h(source.label)}</p>` : ''}
     ${history.length ? `<p class="small"><strong>Historique</strong><br>${history.map((e) => `${h(fmtDate(e.date))}${e.km != null ? ' · ' + fmtKm(e.km) : ''}${e.note ? ' · ' + h(e.note) : ''}`).join('<br>')}</p>` : ''}
     <div class="actions">
@@ -475,12 +635,40 @@ function kmModal() {
   openModal(`
     <h3>Relevé du tableau de bord</h3>
     <form data-form="km">
+      <label>Photo du compteur (facultatif, remplit le kilométrage)<input name="photo" type="file" accept="image/*"></label>
+      <p class="small muted" id="ocr-status" role="status" hidden></p>
       ${field('Date', 'date', today(), 'date', `required max="${today()}"`)}
       ${field('Kilométrage', 'km', '', 'number', `required min="0" inputmode="numeric" placeholder="${stats.km}"`)}
-      ${field('Service d’entretien dans (jours)', 'serviceDays', '', 'number', 'min="0" inputmode="numeric"')}
-      <label>Photo du tableau de bord (facultatif)<input name="photo" type="file" accept="image/*"></label>
       <div class="actions"><button class="primary">Enregistrer</button></div>
     </form>`);
+}
+
+/** Le choix de départ : la photo ouvre directement l'appareil photo grâce à capture. */
+function alertChoiceModal() {
+  openModal(`
+    <h3>Message d’alerte</h3>
+    <p class="muted small">Recopie le message affiché par la voiture.</p>
+    <div class="actions">
+      <label class="button primary">Prendre une photo<input class="visually-hidden" name="alert-photo" type="file" accept="image/*" capture="environment"></label>
+      <button data-action="alert-form">Saisir à la main</button>
+    </div>`);
+}
+
+function alertFormModal(photo) {
+  const options = S.carnet.operations.map((op) => `<option value="${h(op.id)}">${h(op.title)}</option>`).join('');
+  openModal(`
+    <h3>Message d’alerte</h3>
+    <form data-form="alert">
+      <p class="small muted" id="ocr-status" role="status" hidden></p>
+      <label>Concerne<select name="opId">${options}<option value="new">Autre message</option></select></label>
+      <div id="alert-title" hidden>${field('Message affiché', 'title', '', 'text')}</div>
+      <div class="two">
+        ${field('Dans (jours)', 'serviceDays', '', 'number', 'min="0" inputmode="numeric"')}
+        ${field('Ou dans (km)', 'serviceKm', '', 'number', 'min="0" inputmode="numeric"')}
+      </div>
+      <div class="actions"><button class="primary">Enregistrer</button></div>
+    </form>`);
+  if (photo) fillFromPhoto(photo, modalBody.querySelector('form'));
 }
 
 function apptFormModal({ id, date, opId }) {
@@ -526,6 +714,7 @@ function invoiceFormModal() {
     <h3>Nouvelle facture</h3>
     <form data-form="invoice">
       <label>Photo ou PDF<input name="file" type="file" accept="image/*,application/pdf" required></label>
+      <p class="small muted" id="ocr-status" role="status" hidden></p>
       ${field('Objet', 'title', '', 'text', 'required placeholder="Révision, pneus…"')}
       <div class="two">
         ${field('Date', 'date', today(), 'date', `required max="${today()}"`)}
@@ -579,6 +768,7 @@ async function commit(mutate) {
     S.rev = await S.store.save(next, S.rev);
     S.carnet = next;
     render();
+    publishCalendar();
     return true;
   } catch (error) {
     if (error instanceof ConflictError) {
@@ -604,6 +794,45 @@ async function reload() {
 }
 
 /** Réduit les photos avant envoi. Un fichier illisible est conservé tel quel. */
+let ocrRun = 0;
+
+/** Lit la photo et préremplit le formulaire ; la saisie à la main reste toujours possible. */
+/** Un fichier d'historique préparé à part : les données réelles n'entrent jamais dans le dépôt. */
+async function importHistory(file) {
+  let history;
+  try {
+    history = JSON.parse(await file.text());
+  } catch {
+    toast('Ce fichier n’est pas un historique lisible.');
+    return;
+  }
+  if (history?.version !== 1) { toast('Ce fichier n’est pas un historique lisible.'); return; }
+  if (!confirm('Ajouter cet historique au carnet ? Les dates d’entretien et les échéances seront mises à jour.')) return;
+  let summary;
+  const saved = await commit((c) => { summary = applyHistory(c, history); });
+  if (saved) toast(`Historique ajouté : ${summary.entries} interventions, ${summary.readings} relevés.`);
+}
+
+async function fillFromPhoto(file, form, parse = parseDashboard) {
+  const status = form.querySelector('#ocr-status');
+  const say = (message) => { status.hidden = false; status.textContent = message; };
+  ocrRun += 1;
+  const run = ocrRun;
+  if (!file) { status.hidden = true; return; }
+  if (!file.type.startsWith('image/')) { say('Seules les photos sont lues : complète le formulaire à la main.'); return; }
+
+  say('Lecture de la photo… La première fois peut prendre une minute.');
+  try {
+    const found = parse(await readPhotoText(file), kmStats(S.carnet, today()).lastKm);
+    if (run !== ocrRun) return; // une autre photo a été choisie entre-temps
+    const filled = Object.entries(found).filter(([name, value]) => value != null && form.elements[name]);
+    filled.forEach(([name, value]) => { form.elements[name].value = value; });
+    say(filled.length ? 'Valeurs lues sur la photo. Vérifie-les avant d’enregistrer.' : 'Rien de lisible sur cette photo : saisis les valeurs à la main.');
+  } catch {
+    if (run === ocrRun) say('La lecture a échoué : saisis les valeurs à la main.');
+  }
+}
+
 async function prepareImage(file) {
   if (!file.type.startsWith('image/')) return file;
   try {
@@ -622,15 +851,77 @@ async function prepareImage(file) {
 
 const extension = (blob) => ({ 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/heic': 'heic' })[blob.type] || 'bin';
 
-function downloadIcs(appt) {
-  const url = URL.createObjectURL(new Blob([buildIcs(appt)], { type: 'text/calendar;charset=utf-8' }));
+function saveCalendar(text, name) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/calendar;charset=utf-8' }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'rendez-vous-voiture.ics';
+  link.download = name;
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+const DUES_FILE = 'echeances-voiture.ics';
+const duesCalendar = () => buildDueIcs(sortedOperations(S.carnet, today()), today());
+
+const CALENDAR_FILE = 'echeances.ics';
+const calendarText = () => buildDueIcs(sortedOperations(S.carnet, today()), today(), { allowEmpty: true });
+const calendarBlob = () => new Blob([calendarText()], { type: 'text/calendar' });
+
+let calendarSent = null;
+
+/** Republie le calendrier abonné s'il a changé. Un échec ne doit jamais gêner la saisie. */
+async function publishCalendar() {
+  if (!(S.store instanceof DropboxStore) || !S.carnet?.calendarUrl) return;
+  const content = calendarText().replace(/DTSTAMP:[^\r]*\r\n/g, '');
+  if (content === calendarSent) return;
+  try {
+    await S.store.putFile(CALENDAR_FILE, calendarBlob());
+    calendarSent = content;
+  } catch (error) {
+    console.warn('Publication du calendrier impossible', error);
+  }
+}
+
+function calendarSection() {
+  const { calendarUrl } = S.carnet;
+  return `
+    <h2>Calendrier automatique</h2>
+    <div class="card">
+      ${calendarUrl ? `
+        <p class="muted small">Le calendrier suit chaque mise à jour du carnet. Abonne-toi une seule fois sur chaque téléphone. Toute personne ayant ce lien voit les titres et dates des entretiens.</p>
+        <div class="actions">
+          <a class="button primary" href="${h(calendarFeedUrl(calendarUrl))}">S’abonner</a>
+          <button data-action="calendar-copy">Copier le lien</button>
+        </div>` : `
+        <p class="muted small">Un calendrier auquel ton iPhone s’abonne une fois, et qui suit ensuite tes échéances.</p>
+        <div class="actions"><button class="primary" data-action="calendar-enable">Activer</button></div>`}
+    </div>`;
+}
+
+function calendarAuthorizeModal() {
+  openModal(`
+    <h3>Autoriser le lien</h3>
+    <p>Dropbox doit autoriser l’app à créer un lien. C’est à faire une seule fois, sur un seul téléphone.</p>
+    <p class="small">1. Dans l’onglet Permissions de <a href="https://www.dropbox.com/developers/apps" target="_blank" rel="noopener">ton app Dropbox</a>, coche <strong>sharing.read</strong> et <strong>sharing.write</strong>, puis valide avec Submit.</p>
+    <p class="small">2. Reviens ici, touche Autoriser, puis Activer une dernière fois.</p>
+    <div class="actions"><button class="primary" data-action="calendar-authorize">Autoriser</button></div>`);
+}
+
+function remindersModal() {
+  const text = duesCalendar();
+  if (!text) { toast('Aucune échéance à venir pour le moment.'); return; }
+  const count = text.match(/BEGIN:VEVENT/g).length;
+  const canShare = navigator.canShare?.({ files: [new File([text], DUES_FILE, { type: 'text/calendar' })] });
+  openModal(`
+    <h3>Rappels</h3>
+    <p>${count} échéance${count > 1 ? 's' : ''} à ajouter à ton calendrier, avec un rappel 14 jours avant et la veille à 9 h.</p>
+    <p class="muted small">Les dates changent avec ton kilométrage : refais cet ajout après un nouveau relevé. Les entretiens en retard ou sans date n’y figurent pas.</p>
+    <div class="actions">
+      <button class="primary" data-action="reminders-save">Ajouter au calendrier</button>
+      ${canShare ? '<button data-action="reminders-share">Partager</button>' : ''}
+    </div>`);
 }
 
 const FORMS = {
@@ -668,8 +959,26 @@ const FORMS = {
     }
     const saved = await commit((c) => {
       c.readings.push({ id, date: values.date, km: Number(values.km), photo: path, note: '' });
-      if (values.serviceDays !== '') {
-        c.operations.find((o) => o.id === 'service').dueDate = addDays(values.date, Number(values.serviceDays));
+    });
+    if (saved) closeModal();
+  },
+
+  async alert(values) {
+    if (values.serviceDays === '' && values.serviceKm === '') throw new Error('Indique un délai en jours ou en kilomètres.');
+    const t = today();
+    // Le message de la voiture remplace entièrement l'échéance précédente.
+    const due = {
+      dueDate: values.serviceDays !== '' ? addDays(t, Number(values.serviceDays)) : null,
+      dueKm: values.serviceKm !== '' ? kmStats(S.carnet, t).km + Number(values.serviceKm) : null,
+    };
+    const saved = await commit((c) => {
+      if (values.opId === 'new') {
+        c.operations.push({
+          id: uid('op'), title: values.title, description: '', intervalKm: null, intervalMonths: null, firstMonths: null,
+          lastDoneDate: null, lastDoneKm: null, costMin: null, costMax: null, note: '', history: [], source: null, ...due,
+        });
+      } else {
+        Object.assign(c.operations.find((o) => o.id === values.opId), due);
       }
     });
     if (saved) closeModal();
@@ -751,6 +1060,10 @@ const ACTIONS = {
   go: ({ view }) => { S.view = view; render(); scrollTo(0, 0); },
   close: closeModal,
   km: kmModal,
+  alert: alertChoiceModal,
+  'alert-form': () => alertFormModal(),
+  'budget-year': ({ year }) => { S.budgetYear = year; render(); },
+  jump: ({ id }) => document.getElementById(`op-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
   op: ({ id }) => opModal(id),
   done: ({ id }) => doneModal(id),
   'edit-op': ({ id }) => opFormModal(id),
@@ -770,7 +1083,28 @@ const ACTIONS = {
     if (!confirm('Supprimer ce rendez-vous du carnet ?')) return;
     if (await commit((c) => { c.appointments = c.appointments.filter((a) => a.id !== id); })) closeModal();
   },
-  ics: ({ id }) => downloadIcs(S.carnet.appointments.find((a) => a.id === id)),
+  ics: ({ id }) => saveCalendar(buildIcs(S.carnet.appointments.find((a) => a.id === id)), 'rendez-vous-voiture.ics'),
+  reminders: remindersModal,
+  async 'calendar-enable'() {
+    await S.store.putFile(CALENDAR_FILE, calendarBlob());
+    let url;
+    try {
+      url = await S.store.sharedLink(CALENDAR_FILE);
+    } catch (error) {
+      if (error instanceof MissingScopeError) return calendarAuthorizeModal();
+      throw error;
+    }
+    if (await commit((c) => { c.calendarUrl = url; })) toast('Calendrier activé.');
+  },
+  'calendar-authorize': () => beginDropboxAuth(CALENDAR_SCOPE),
+  async 'calendar-copy'() {
+    await navigator.clipboard.writeText(calendarFeedUrl(S.carnet.calendarUrl));
+    toast('Lien copié.');
+  },
+  'reminders-save': () => saveCalendar(duesCalendar(), DUES_FILE),
+  async 'reminders-share'() {
+    await navigator.share({ files: [new File([duesCalendar()], DUES_FILE, { type: 'text/calendar' })] }).catch(() => {});
+  },
   async 'ics-share'({ id }) {
     const file = new File([buildIcs(S.carnet.appointments.find((a) => a.id === id))], 'rendez-vous-voiture.ics', { type: 'text/calendar' });
     await navigator.share({ files: [file] }).catch(() => {});
@@ -822,6 +1156,20 @@ document.addEventListener('click', async (event) => {
   }
 });
 
+document.addEventListener('change', ({ target }) => {
+  if (target.matches('form[data-form="km"] input[name="photo"]')) fillFromPhoto(target.files[0], target.form);
+  if (target.matches('form[data-form="invoice"] input[name="file"]')) {
+    fillFromPhoto(target.files[0], target.form, (text, lastKm) => parseInvoice(text, lastKm, today()));
+  }
+  if (target.matches('input[name="history"]') && target.files[0]) importHistory(target.files[0]);
+  if (target.matches('input[name="alert-photo"]') && target.files[0]) alertFormModal(target.files[0]);
+  if (target.matches('form[data-form="alert"] select[name="opId"]')) {
+    const isNew = target.value === 'new';
+    target.form.querySelector('#alert-title').hidden = !isNew;
+    target.form.elements.title.required = isNew;
+  }
+});
+
 document.addEventListener('submit', async (event) => {
   const form = event.target.closest('[data-form]');
   if (!form) return;
@@ -856,6 +1204,7 @@ async function start() {
 
   try {
     await reload();
+    publishCalendar();
   } catch (error) {
     viewWelcome(error.message || 'Chargement impossible.');
   }
