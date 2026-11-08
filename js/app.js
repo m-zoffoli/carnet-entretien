@@ -1,6 +1,6 @@
 import {
-  addDays, applyDone, applyHistory, buildAlertPrompt, buildDueIcs, buildIcs, calendarFeedUrl, claudeChatUrl, createCarnet, diffDays, forecast, fromISO, kmStats, nextDue,
-  parseDashboard, parseInvoice, priceOf, sortedOperations, spendPlan, spentByYear, toISO, uid, upgradeCarnet,
+  addDays, applyDone, applyHistory, applyClaudeUpdate, buildAlertPrompt, buildCheckPrompt, buildDueIcs, buildInterventionsCsv, buildIcs, calendarFeedUrl, claudeChatUrl, createCarnet, diffDays, forecast, fromISO, kmStats, nextDue,
+  invoiceRead, parseClaudeUpdate, parseDashboard, parseInvoice, priceOf, sortedOperations, spendPlan, spentByYear, toISO, uid, upgradeCarnet,
 } from './domain.js';
 import { GUIDE } from './guide.js';
 import { readPhotoText } from './ocr.js';
@@ -315,7 +315,10 @@ function viewInvoices() {
     </button>`).join('');
   return `
     <h1>Factures</h1>
-    <div class="actions"><button class="primary" data-action="new-invoice">Ajouter une facture</button></div>
+    <div class="actions">
+      <button class="primary" data-action="new-invoice">Ajouter une facture</button>
+      <button data-action="interventions">Interventions et vérification</button>
+    </div>
     ${rows ? `<h2>${list.length} facture${list.length > 1 ? 's' : ''}</h2><div class="list">${rows}</div>` : '<p class="muted">Aucune facture pour l’instant. Ajoute une photo ou un PDF.</p>'}`;
 }
 
@@ -646,6 +649,41 @@ function alertSavedModal(prompt) {
     </div>`);
 }
 
+const MAX_LINK_LENGTH = 8000; // au-delà, le lien risque d'être refusé : la question passe par le presse-papiers
+
+function interventionsModal() {
+  const csv = buildInterventionsCsv(S.carnet);
+  const count = csv.split('\n').length - 1;
+  claudePrompt = buildCheckPrompt(S.carnet, csv, today());
+  const link = claudeChatUrl(claudePrompt);
+  openModal(`
+    <h3>Interventions</h3>
+    <p>${count} intervention${count > 1 ? 's' : ''} connue${count > 1 ? 's' : ''}, avec leur date et leur kilométrage.</p>
+    <p class="muted small">Claude vérifie ce qui a été fait et propose les prochaines échéances. La question, CSV compris, est aussi copiée : si elle n’apparaît pas, il suffit de la coller.</p>
+    <div class="actions">
+      <a class="button primary" href="${h(link.length > MAX_LINK_LENGTH ? 'https://claude.ai/new' : link)}" target="_blank" rel="noopener" data-action="ask-claude">Demander à Claude</a>
+      <button data-action="interventions-csv">Télécharger le CSV</button>
+    </div>
+    <form data-form="claude-reply">
+      ${textarea('Réponse de Claude, à coller ici', 'reply')}
+      <div class="actions"><button>Analyser la réponse</button></div>
+    </form>`);
+}
+
+let claudeChanges = [];
+
+function claudeChangesModal() {
+  const when = ({ date, km }) => [date && fmtDate(date), km != null && fmtKm(km)].filter(Boolean).join(' ou ');
+  openModal(`
+    <h3>Échéances proposées</h3>
+    ${claudeChanges.map((c) => `<p><strong>${h(c.title)}</strong> : ${h(when(c))}${c.note ? `<br><span class="muted small">${h(c.note)}</span>` : ''}</p>`).join('')}
+    <p class="muted small">Ces échéances remplacent les actuelles. Vérifie-les avant d’appliquer.</p>
+    <div class="actions">
+      <button class="primary" data-action="claude-apply">Appliquer</button>
+      <button data-action="close">Annuler</button>
+    </div>`);
+}
+
 function apptFormModal({ id, date, opId }) {
   const existing = id ? S.carnet.appointments.find((a) => a.id === id) : null;
   const op = opId ? S.carnet.operations.find((o) => o.id === opId) : null;
@@ -793,16 +831,19 @@ async function fillFromPhoto(file, form, parse = parseDashboard) {
   const say = (message) => { status.hidden = false; status.textContent = message; };
   ocrRun += 1;
   const run = ocrRun;
+  form.readText = null;
   if (!file) { status.hidden = true; return; }
-  if (!file.type.startsWith('image/')) { say('Seules les photos sont lues : complète le formulaire à la main.'); return; }
+  if (!file.type.startsWith('image/') && file.type !== 'application/pdf') { say('Ce format n’est pas lu : complète le formulaire à la main.'); return; }
 
-  say('Lecture de la photo… La première fois peut prendre une minute.');
+  say('Lecture du document… La première fois peut prendre une minute.');
   try {
-    const found = parse(await readPhotoText(file), kmStats(S.carnet, today()).lastKm);
+    const text = await readPhotoText(file);
     if (run !== ocrRun) return; // une autre photo a été choisie entre-temps
+    form.readText = text;
+    const found = parse(text, kmStats(S.carnet, today()).lastKm);
     const filled = Object.entries(found).filter(([name, value]) => value != null && form.elements[name]);
     filled.forEach(([name, value]) => { form.elements[name].value = value; });
-    say(filled.length ? 'Valeurs lues sur la photo. Vérifie-les avant d’enregistrer.' : 'Rien de lisible sur cette photo : saisis les valeurs à la main.');
+    say(filled.length ? 'Valeurs lues sur le document. Vérifie-les avant d’enregistrer.' : 'Rien de lisible sur ce document : saisis les valeurs à la main.');
   } catch {
     if (run === ocrRun) say('La lecture a échoué : saisis les valeurs à la main.');
   }
@@ -826,8 +867,8 @@ async function prepareImage(file) {
 
 const extension = (blob) => ({ 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/heic': 'heic' })[blob.type] || 'bin';
 
-function saveCalendar(text, name) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/calendar;charset=utf-8' }));
+function saveCalendar(text, name, type = 'text/calendar;charset=utf-8') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const link = document.createElement('a');
   link.href = url;
   link.download = name;
@@ -938,6 +979,12 @@ const FORMS = {
     if (saved) closeModal();
   },
 
+  'claude-reply'(values) {
+    claudeChanges = parseClaudeUpdate(values.reply, S.carnet);
+    if (!claudeChanges.length) { toast('Aucune échéance à changer dans cette réponse.'); return; }
+    claudeChangesModal();
+  },
+
   async alert(values) {
     if (values.serviceDays === '' && values.serviceKm === '') throw new Error('Indique un délai en jours ou en kilomètres.');
     const t = today();
@@ -1022,6 +1069,7 @@ const FORMS = {
       c.invoices.push({
         id, title: values.title, date: values.date, amount: num(values.amount), km,
         garage: values.garage, notes: values.notes, ops, file: path, fileType: blob.type,
+        ...(form.readText ? { read: invoiceRead(form.readText) } : {}),
       });
       for (const opId of ops) {
         const op = c.operations.find((o) => o.id === opId);
@@ -1039,6 +1087,14 @@ const ACTIONS = {
   close: closeModal,
   km: kmModal,
   alert: alertChoiceModal,
+  interventions: interventionsModal,
+  'interventions-csv': () => saveCalendar(`\ufeff${buildInterventionsCsv(S.carnet)}`, 'interventions-voiture.csv', 'text/csv;charset=utf-8'),
+  async 'claude-apply'() {
+    if (await commit((c) => applyClaudeUpdate(c, claudeChanges))) {
+      closeModal();
+      toast(`${claudeChanges.length} échéance${claudeChanges.length > 1 ? 's' : ''} mise${claudeChanges.length > 1 ? 's' : ''} à jour.`);
+    }
+  },
   menu: () => { S.menuOpen = !S.menuOpen; renderMenu(); },
   'ask-claude': () => navigator.clipboard?.writeText(claudePrompt).catch(() => {}),
   'alert-form': () => alertFormModal(),

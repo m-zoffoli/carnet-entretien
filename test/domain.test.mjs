@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addMonths, addDays, applyDone, applyHistory, buildAlertPrompt, buildDueIcs, buildIcs, calendarFeedUrl, claudeChatUrl, createCarnet, forecast, kmStats, nextDue, parseDashboard, parseInvoice, spendPlan, spentByYear, upgradeCarnet } from '../js/domain.js';
+import { addMonths, addDays, applyDone, applyClaudeUpdate, applyHistory, buildAlertPrompt, buildCheckPrompt, buildDueIcs, buildInterventionsCsv, invoiceRead, parseClaudeUpdate, buildIcs, calendarFeedUrl, claudeChatUrl, createCarnet, forecast, kmStats, nextDue, parseDashboard, parseInvoice, spendPlan, spentByYear, upgradeCarnet } from '../js/domain.js';
 import { GUIDE } from '../js/guide.js';
 
 const today = '2026-11-08';
@@ -131,6 +131,59 @@ test('la question ne mentionne que le délai renseigné', () => {
 
 test('le lien vers Claude encode la question', () => {
   assert.equal(claudeChatUrl('a b & c'), 'https://claude.ai/new?q=a%20b%20%26%20c');
+});
+
+test('une facture lue garde seulement les lignes utiles à l’entretien', () => {
+  const read = invoiceRead('M. Dupont\n06 12 34 56 78\nVidange moteur 80,00\nFiltre à huile 12,00\nTVA 20 %');
+  assert.deepEqual(read.lines, ['Vidange moteur 80,00', 'Filtre à huile 12,00']);
+  assert.match(read.text, /Dupont/);
+});
+
+test('le CSV réunit les interventions sans compter deux fois une facture', () => {
+  const c = carnet();
+  applyHistory(c, HISTORY);
+  applyDone(op(c, 'freins'), { date: '2026-03-01', km: 130000, note: 'Facture : Freins' });
+  c.invoices.push({ date: '2026-03-01', km: 130000, title: 'Freins', ops: ['freins'], garage: 'Garage; Centre', amount: 240.5, read: { lines: ['Plaquettes avant'] } });
+  const lines = buildInterventionsCsv(c).split('\n');
+  assert.equal(lines[0], 'date;kilometrage;intervention;detail;garage;montant_eur;source');
+  assert.equal(lines.filter((l) => l.startsWith('2026-03-01')).length, 1);
+  assert.match(lines.find((l) => l.startsWith('2026-03-01')), /Plaquettes avant;"Garage; Centre";240,5;facture/);
+  assert.equal(lines[1].slice(0, 10), '2024-06-18');
+});
+
+test('la question de vérification contient le CSV, les identifiants et le format de réponse', () => {
+  const c = carnet();
+  const prompt = buildCheckPrompt(c, 'date;km', today);
+  assert.match(prompt, /```csv\ndate;km\n```/);
+  assert.match(prompt, /^frein \| Liquide de frein/m);
+  assert.match(prompt, /"version":1/);
+});
+
+test('une réponse de Claude ne produit que des échéances valides sur des entretiens connus', () => {
+  const c = carnet();
+  const fence = '`'.repeat(3);
+  const reply = [
+    'Voici mon analyse, avec un exemple {pas du json}.',
+    `${fence}json`,
+    '{"version":1,"operations":[',
+    '  {"id":"frein","due":{"date":"2026-12-01","km":null},"note":"En retard."},',
+    '  {"id":"inconnue","due":{"date":"2026-12-01"}},',
+    '  {"id":"air","due":{"date":"2026-02-31","km":-5}},',
+    '  {"id":"pneus","due":{"date":null,"km":null}}',
+    ']}',
+    fence,
+  ].join('\n');
+  const changes = parseClaudeUpdate(reply, c);
+  assert.deepEqual(changes, [{ id: 'frein', title: 'Liquide de frein', date: '2026-12-01', km: null, note: 'En retard.' }]);
+  applyClaudeUpdate(c, changes);
+  assert.equal(op(c, 'frein').dueDate, '2026-12-01');
+  assert.equal(op(c, 'frein').note, 'En retard.');
+  assert.equal(nextDue(op(c, 'frein'), c, today).date, '2026-12-01');
+});
+
+test('une réponse sans bloc de mise à jour est refusée', () => {
+  assert.throws(() => parseClaudeUpdate('Tout va bien.', carnet()), /Aucun bloc/);
+  assert.throws(() => parseClaudeUpdate('{"version":2,"operations":[]}', carnet()), /Aucun bloc/);
 });
 
 test('le service suit la date affichée par le tableau de bord', () => {
@@ -268,6 +321,10 @@ Prochaine révision à 172 000 km`;
   assert.deepEqual(parseInvoice(text, 142457, today), {
     title: 'Révision', date: '2026-10-14', amount: 408.48, km: 142457, garage: 'GARAGE DU CENTRE',
   });
+});
+
+test('le kilométrage d’une facture peut être séparé de son libellé par un mot', () => {
+  assert.equal(parseInvoice('Dernier kilométrage constaté : 139509', 142457, today).km, 139509);
 });
 
 test('le montant vient du net à payer, y compris sur la ligne suivante', () => {

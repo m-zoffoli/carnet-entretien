@@ -27,4 +27,4 @@ L'interface est composée en Apfel Grotezk (Collletttivo, licence SIL OFL 1.1), 
 
 ## Lecture des photos
 
-Les photos du tableau de bord et des factures sont lues sur l'appareil par Tesseract.js (licence Apache 2.0), hébergé dans `vendor/tesseract/` : aucune image n'est envoyée à un service extérieur.
+Les photos du tableau de bord, les photos et les PDF des factures sont lus sur l'appareil par Tesseract.js et PDF.js (licences Apache 2.0), hébergés dans `vendor/` : aucune image n'est envoyée à un service extérieur.
