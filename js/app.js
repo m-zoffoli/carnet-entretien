@@ -25,8 +25,11 @@ const h = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmtDate = (s) => (s ? fromISO(s).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
 const fmtShort = (s) => fromISO(s).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-const fmtKm = (n) => `${Number(n).toLocaleString('fr-FR')} km`;
-const fmtEur = (n) => Number(n).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: Number.isInteger(Number(n)) ? 0 : 2 });
+// Apfel Grotezk n'a pas d'espace fine insécable : on la remplace par une espace insécable.
+const wide = (s) => s.replace(/\u202f/g, '\u00a0');
+const fmtNum = (n) => wide(Number(n).toLocaleString('fr-FR'));
+const fmtKm = (n) => `${fmtNum(n)} km`;
+const fmtEur = (n) => wide(Number(n).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: Number.isInteger(Number(n)) ? 0 : 2 }));
 const num = (value) => (value === '' || value == null ? null : Number(value));
 
 function dueText(due) {
@@ -88,21 +91,58 @@ function closeModal() {
 
 // --- Vues --------------------------------------------------------------------
 
+const ARROW = '<svg class="arrow" viewBox="0 0 56 40" aria-hidden="true"><path d="M2 20h50M34 3l18 17-18 17"/></svg>';
+const GEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>';
+const pill = (text, kind = '') => `<span class="pill ${kind}">${h(text)}</span>`;
+
+/** Le délai restant, en jours ou en kilomètres selon l'axe qui décide l'échéance. */
+function delay(due) {
+  const byKm = due.kmLeft != null && (due.estimated || due.daysLeft == null);
+  if (byKm) return due.kmLeft < 0 ? `−${fmtNum(-due.kmLeft)} km` : `${fmtNum(due.kmLeft)} km`;
+  if (due.daysLeft == null) return '—';
+  const sign = due.daysLeft < 0 ? '−' : '';
+  const days = Math.abs(due.daysLeft);
+  if (days < 100) return `${sign}${days} j`;
+  const months = Math.round(days / 30.44);
+  if (months < 24) return `${sign}${months} mois`;
+  return `${sign}${Math.round(days / 365.25)} ans`;
+}
+
+function opPills(due) {
+  const out = [];
+  if (due.status !== 'ok') out.push(statusBadge(due));
+  if (due.status === 'fait' || due.status === 'inconnu') return out.join('');
+  if (due.status !== 'retard') out.push(pill(`dans ${delay(due)}`));
+  out.push(pill(dueText(due)));
+  return out.join('');
+}
+
 const opRow = ({ op, due }) => `
-  <button class="row" data-action="op" data-id="${h(op.id)}">
-    <span class="row-main">
-      <span class="row-title">${h(op.title)}</span><br>
-      <span class="muted small">${h(dueText(due))}</span>
-    </span>
-    <span class="row-side">${statusBadge(due)}</span>
+  <button class="line ${due.status === 'fait' ? 'is-done' : ''}" data-action="op" data-id="${h(op.id)}">
+    <span class="line-head"><span class="line-title">${h(op.title)}</span>${ARROW}</span>
+    <span class="pills">${opPills(due)}</span>
   </button>`;
 
+const opBlock = ({ op, due }) => `
+  <button class="block ${due.status}" data-action="op" data-id="${h(op.id)}">
+    <span class="block-head"><span>${h(op.title)}</span>${due.status === 'retard' ? pill('En retard') : ''}</span>
+    <span class="block-value ${delay(due).length > 5 ? 'long' : ''}">${h(delay(due))}</span>
+    <span class="block-sub">${h(dueText(due))}</span>
+  </button>`;
+
+const apptWhen = (a) => `${fromISO(a.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })} · ${a.time}`;
+
 const apptRow = (a) => `
-  <button class="row" data-action="appt" data-id="${h(a.id)}">
-    <span class="row-main">
-      <span class="row-title">${h(a.title)}</span><br>
-      <span class="muted small">${h(fmtDate(a.date))} à ${h(a.time)}${a.location ? ' · ' + h(a.location) : ''}</span>
-    </span>
+  <button class="line" data-action="appt" data-id="${h(a.id)}">
+    <span class="line-head"><span class="line-title">${h(a.title)}</span>${ARROW}</span>
+    <span class="pills">${pill(apptWhen(a), 'rdv')}${a.location ? pill(a.location) : ''}</span>
+  </button>`;
+
+const apptBlock = (a) => `
+  <button class="block rdv" data-action="appt" data-id="${h(a.id)}">
+    <span class="block-head"><span>${h(a.title)}</span></span>
+    <span class="block-value">${h(a.date.slice(8, 10) + '.' + a.date.slice(5, 7))}</span>
+    <span class="block-sub">${h(apptWhen(a))}${a.location ? ' · ' + h(a.location) : ''}</span>
   </button>`;
 
 const upcomingAppts = (c) =>
@@ -118,26 +158,39 @@ function viewHome() {
   const appts = upcomingAppts(c).slice(0, 3);
   const f = forecast(c, t);
   const spent = spentByYear(c).find(([y]) => y === t.slice(0, 4))?.[1] || 0;
+  const name = [c.vehicle.marque, c.vehicle.modele].filter(Boolean).join(' ') || 'Ma voiture';
+
+  // Trois blocs au plus : les urgences d'abord, puis le prochain rendez-vous s'il reste de la place.
+  const blocks = urgent.slice(0, 3).map(opBlock);
+  const apptInBlock = blocks.length < 3 && appts.length > 0;
+  if (apptInBlock) blocks.push(apptBlock(appts[0]));
+  const lines = [
+    ...urgent.slice(3).map(opRow),
+    ...appts.slice(apptInBlock ? 1 : 0).map(apptRow),
+    ...next.map(opRow),
+  ];
+
   return `
     <div class="topbar">
-      <div>
-        <p class="muted small">${h(c.vehicle.marque)}</p>
-        <h1>${h(c.vehicle.modele)}</h1>
-      </div>
-      <button class="icon" data-action="go" data-view="vehicle" aria-label="Véhicule et réglages">⚙︎</button>
+      ${pill(name)}
+      <button class="icon" data-action="go" data-view="vehicle" aria-label="Véhicule et réglages">${GEAR}</button>
     </div>
-    <div class="card">
-      <div class="stat">${fmtKm(stats.km)}</div>
-      <p class="muted small">Relevé du ${h(fmtDate(stats.lastDate))}${stats.perYear ? ` · environ ${fmtKm(stats.perYear)} par an` : ''}</p>
-      <div class="actions"><button class="primary" data-action="km">Mettre à jour le kilométrage</button></div>
+    <div class="hero">
+      <p class="hero-label">Kilométrage${stats.lastDate ? ` · relevé le ${h(fmtShort(stats.lastDate))}` : ''}</p>
+      <p class="hero-value">${fmtNum(stats.km)}<span>km</span></p>
+      ${stats.perYear ? `<p class="hero-label">Environ ${fmtKm(stats.perYear)} par an</p>` : ''}
     </div>
-    ${urgent.length ? `<h2>À traiter</h2><div class="list">${urgent.map(opRow).join('')}</div>` : ''}
-    ${appts.length ? `<h2>Rendez-vous</h2><div class="list">${appts.map(apptRow).join('')}</div>` : ''}
-    ${next.length ? `<h2>Ensuite</h2><div class="list">${next.map(opRow).join('')}</div>` : ''}
-    <h2>Budget</h2>
-    <div class="card stat-pair">
-      <div><div class="stat">${fmtEur(spent)}</div><p class="muted small">Dépensé en ${t.slice(0, 4)}</p></div>
-      <div><div class="stat">${f.max ? budgetRange(f) : 'À chiffrer'}</div><p class="muted small">Prévu sur 12 mois</p></div>
+    ${blocks.length ? `<div class="blocks">${blocks.join('')}</div>` : ''}
+    <div class="list">
+      ${lines.join('')}
+      <button class="line" data-action="go" data-view="budget">
+        <span class="line-head"><span class="line-title">${fmtEur(spent)} en ${t.slice(0, 4)}</span>${ARROW}</span>
+        <span class="pills">${pill(f.max ? `${budgetRange(f)} prévus sur 12 mois` : 'Prévisions à chiffrer')}</span>
+      </button>
+    </div>
+    <div class="bar">
+      <button class="primary" data-action="km">Noter le km <span aria-hidden="true">+</span></button>
+      <button data-action="go" data-view="calendar">Agenda</button>
     </div>`;
 }
 
@@ -196,15 +249,19 @@ function viewCalendar() {
 function viewMaintenance() {
   const ops = sortedOperations(S.carnet, today());
   const dated = ops.filter((x) => x.due.date);
+  const urgent = dated.filter((x) => x.due.status === 'retard' || x.due.status === 'bientot').slice(0, 3);
+  const later = dated.filter((x) => !urgent.includes(x));
   const unknown = ops.filter((x) => !x.due.date && x.due.status === 'inconnu');
   const done = ops.filter((x) => x.due.status === 'fait');
   return `
     <h1>Entretien</h1>
+    ${urgent.length ? `<div class="blocks">${urgent.map(opBlock).join('')}</div>` : ''}
     <h2>Échéances</h2>
-    <div class="list">${dated.map(opRow).join('') || '<p class="card">Aucune échéance.</p>'}</div>
+    <div class="list">${later.map(opRow).join('')}</div>
+    ${!dated.length ? '<p class="muted">Aucune échéance.</p>' : ''}
     ${unknown.length ? `<h2>À confirmer</h2><p class="muted small">Renseigne leur intervalle depuis le plan d’entretien, une facture ou le garage.</p><div class="list">${unknown.map(opRow).join('')}</div>` : ''}
     ${done.length ? `<h2>Faits</h2><div class="list">${done.map(opRow).join('')}</div>` : ''}
-    <div class="actions"><button data-action="edit-op">Ajouter une opération</button></div>`;
+    <div class="bar"><button class="primary" data-action="edit-op">Ajouter une opération <span aria-hidden="true">+</span></button></div>`;
 }
 
 function viewInvoices() {
