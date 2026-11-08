@@ -18,7 +18,7 @@
 }
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --paper: #f6f4ef;
   --ink: #141414;
   --muted: #5f5c55;
@@ -34,15 +34,6 @@
   --font: "Apfel Grotezk", system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #141414;
-    --ink: #f2f0ea;
-    --muted: #b0aca3;
-    --faint: #7d7a73;
-    --cobalt: #3f5be6;
-  }
-}
 
 * { box-sizing: border-box; }
 
