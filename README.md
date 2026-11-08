@@ -20,3 +20,7 @@ node --test test/
 ```bash
 python3 -m http.server 4173
 ```
+
+## Police
+
+L'interface est composée en Apfel Grotezk (Collletttivo). Déposer `ApfelGrotezk-Regular.woff2` et `ApfelGrotezk-Mittel.woff2` dans `fonts/`. Sans ces fichiers, la police installée sur l'appareil est utilisée si elle existe, sinon la police système.
