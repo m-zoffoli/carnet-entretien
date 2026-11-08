@@ -38,6 +38,7 @@
   --muted: #5f5c55;
   --faint: #8a877f;
   --coral: #ff7a6b;
+  --faint-track: #dcd9d1;
   --late: #e0602f;
   --soon: #c98a12;
   --citron: #e6ec5a;
@@ -71,17 +72,15 @@ button, input, select, textarea { font-family: inherit; }
 #app {
   max-width: 640px;
   margin: 0 auto;
-  padding: 0 0 calc(32px + env(safe-area-inset-bottom));
+  padding: 0 0 calc(92px + env(safe-area-inset-bottom)); /* la place du bouton rond */
 }
-/* Une page qui finit par une barre d'action ou des cartes va jusqu'au bas de l'écran. */
-#app:has(> :is(.bar, .stack):last-child) { padding-bottom: env(safe-area-inset-bottom); }
 @media (min-width: 680px) {
   #app { border-inline: var(--rule); min-height: 100dvh; }
 }
 
 /* Tout ce qui n'est pas bord à bord garde une gouttière. */
 #app > * { margin-inline: var(--gut); }
-#app > :is(h1, h2, .topbar, .hero, .tl-wrap, .agenda-band, .stack, .spend, .list, .card, .bar, .line) { margin-inline: 0; }
+#app > :is(h1, h2, .topbar, .hero, .gauge, .agenda-band, .stack, .spend, .list, .card, .bar, .line) { margin-inline: 0; }
 
 /* --- Typographie --------------------------------------------------------- */
 
@@ -136,12 +135,40 @@ strong { font-weight: 700; }
 /* Le padding cale « km » sur la ligne de base du grand chiffre. */
 .hero-unit { display: flex; flex-direction: column; align-items: center; padding-bottom: 7px; font-size: 20px; line-height: 1; }
 
-/* --- Timeline du kilométrage ---------------------------------------------- */
+/* --- Jauge de vie de la voiture ------------------------------------------- */
 
-/* Une règle qui défile sous un repère fixe. Hauteurs : 26 (chiffres) + 20 (dépassement
-   du repère) + 50 (tirets) + 20 (dépassement) ; le repère fait 90 px. --at et --lane
-   sont posées par render(), --x (position du kilométrage actuel) par setupTimeline(). */
-.tl-wrap { position: relative; margin-top: 16px; }
+/* --at est la position sur la jauge, posée par render(). */
+.gauge { padding: 16px var(--gut) 0; }
+.gauge-bar { position: relative; height: 10px; margin-top: 8px; background: var(--faint-track); }
+.gauge-fill { position: absolute; left: 0; top: 0; bottom: 0; width: var(--at); background: var(--ink); }
+/* Le bouton est la zone tactile, 44 px de haut ; le trait visible est dessiné dedans. */
+.gauge-mark {
+  position: absolute;
+  left: var(--at);
+  top: -17px;
+  width: var(--w);
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+.gauge-mark::before {
+  content: "";
+  position: absolute;
+  left: var(--line);
+  top: 12px;
+  width: 3px;
+  height: 20px;
+  margin-left: -1px;
+  background: var(--faint);
+}
+.gauge-mark.retard::before { background: var(--late); }
+.gauge-mark.bientot::before { background: var(--soon); }
+.gauge-ends { display: flex; justify-content: space-between; margin-top: 12px; font-size: 13px; color: var(--muted); }
+.gauge-next { margin: 10px 0 0; font-size: 15px; }
+
 .agenda-band {
   display: flex;
   width: 100%;
@@ -157,69 +184,6 @@ strong { font-weight: 700; }
   line-height: 20px;
 }
 .agenda-band + .stack { margin-top: 0; }
-.tl-scroll { padding-inline: 50%; overflow-x: auto; scrollbar-width: none; }
-.tl-scroll::-webkit-scrollbar { display: none; }
-.tl-scale { position: relative; height: 26px; margin-bottom: 20px; font-size: 13px; line-height: 26px; white-space: nowrap; }
-.tl-scale span { position: absolute; left: var(--at); transform: translateX(-50%); }
-.tl-track { position: relative; height: 50px; }
-.tl-past, .tl-future { position: absolute; top: 0; bottom: 0; }
-.tl-past {
-  left: 0;
-  width: calc(var(--at) + 2px);
-  background: repeating-linear-gradient(90deg, var(--ink) 0 2px, transparent 2px 6px);
-}
-.tl-future {
-  left: var(--at);
-  right: 0;
-  background: repeating-linear-gradient(90deg, var(--faint) 0 1px, transparent 1px 6px);
-}
-.tl-event { position: absolute; left: var(--at); top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--cobalt); }
-.tl-event.retard { background: var(--late); }
-.tl-event.bientot { background: var(--soon); }
-.tl-needle { position: absolute; left: calc(50% - 1px); top: 26px; width: 2px; height: 90px; background: var(--ink); pointer-events: none; }
-.tl-read, .tl-current {
-  position: absolute;
-  top: 0;
-  padding-inline: 6px;
-  background: var(--paper);
-  line-height: 26px;
-  white-space: nowrap;
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-.tl-read { left: 50%; color: var(--faint); font-size: 14px; }
-.tl-read.is-current, .tl-current { color: var(--ink); font-size: 20px; }
-.tl-current { left: var(--x); }
-.tl-current.is-off { visibility: hidden; }
-.tl-nums { position: relative; min-height: 26px; height: calc(var(--lane) * 30px); margin-top: 6px; }
-.tl-nums button {
-  position: absolute;
-  left: var(--at);
-  top: calc(var(--lane) * 30px);
-  width: 24px;
-  min-height: 24px;
-  height: 24px;
-  margin-left: -12px;
-  padding: 0;
-  background: var(--paper);
-  font-size: 13px;
-}
-.tl-nums button::after { content: ""; position: absolute; inset: -3px; }
-
-/* Le même numéro, sur la carte de l'entretien. */
-.num {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-right: 8px;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-  font-family: var(--font);
-  font-size: 13px;
-  vertical-align: 0.15em;
-}
 
 /* --- Pilules -------------------------------------------------------------- */
 
@@ -450,8 +414,27 @@ body:has(#tabs:not([hidden])) #app > :first-child { padding-left: 66px; }
   font-size: 20px;
 }
 .menu button + button { border-top: var(--hair); }
-.menu button.tab-alert { background: var(--coral); color: var(--ink); }
 .menu button[aria-current="page"] { background: var(--ink); color: var(--paper); }
+
+/* Le bouton d'ajout d'alerte reste accessible partout, en bas au centre. */
+.alert-fab {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom) + 16px);
+  left: 50%;
+  z-index: 5;
+  width: 60px;
+  min-height: 60px;
+  height: 60px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--coral);
+  color: var(--ink);
+  font-size: 34px;
+  line-height: 1;
+  transform: translateX(-50%);
+  box-shadow: 0 4px 14px rgb(20 20 20 / .28);
+}
 
 /* --- Dépenses par année --------------------------------------------------- */
 
@@ -581,7 +564,7 @@ h4 { font-size: 13px; font-weight: 700; margin: 24px 0 6px; padding-top: 10px; b
   position: fixed;
   left: 16px;
   right: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom));
+  bottom: calc(88px + env(safe-area-inset-bottom));
   max-width: 480px;
   margin: 0 auto;
   padding: 14px 16px;
