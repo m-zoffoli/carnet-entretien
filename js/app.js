@@ -159,6 +159,7 @@ const SCALE_STEP_KM = 50000;
 const TICK_STEP_KM = 500;
 const TICK_STEP_PX = 6; // doit rester égal au pas des dégradés .tl-past et .tl-future
 const NUM_GAP_PX = 30; // écart minimal entre deux numéros
+const PULSE_EVERY_TICKS = 5;
 const roundKm = (n) => Math.ceil(n / 100) * 100;
 const trackWidth = (end) => (end / TICK_STEP_KM) * TICK_STEP_PX;
 
@@ -217,7 +218,23 @@ function setupTimeline() {
   const current = wrap.querySelector('.tl-current');
   const kmX = (km / end) * width;
 
+  const needle = wrap.querySelector('.tl-needle');
+  const stillMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let lastPulseStep = null;
+  let pulse = null;
+
+  // Une impulsion du repère tous les PULSE_EVERY_TICKS tirets : des crans visibles au défilement.
+  const pulseOnStep = () => {
+    const step = Math.floor(scroller.scrollLeft / (TICK_STEP_PX * PULSE_EVERY_TICKS));
+    if (lastPulseStep !== null && step !== lastPulseStep && !stillMotion) {
+      pulse?.cancel();
+      pulse = needle.animate([{ transform: 'scaleX(2.5)' }, { transform: 'scaleX(1)' }], { duration: 140, easing: 'ease-out' });
+    }
+    lastPulseStep = step;
+  };
+
   const update = () => {
+    pulseOnStep();
     const offset = kmX - scroller.scrollLeft;
     const onCurrent = Math.abs(offset) < 2;
     read.classList.toggle('is-current', onCurrent);
