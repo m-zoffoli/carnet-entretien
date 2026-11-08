@@ -44,6 +44,7 @@ body {
   background: var(--paper);
   color: var(--ink);
   font: 400 16px/1.4 var(--font);
+  letter-spacing: 0;
   padding: env(safe-area-inset-top) 0 0;
 }
 
@@ -71,7 +72,6 @@ h1 {
   font-size: 56px;
   font-weight: 400;
   line-height: 1;
-  letter-spacing: -0.04em;
 }
 h2 {
   margin: 0;
@@ -79,11 +79,10 @@ h2 {
   border-top: var(--rule);
   font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0;
   text-transform: none;
   color: var(--ink);
 }
-h3 { font-size: 30px; font-weight: 400; letter-spacing: -0.03em; line-height: 1.05; margin: 0 0 12px; padding-right: 48px; }
+h3 { font-size: 30px; font-weight: 400; line-height: 1.05; margin: 0 0 12px; padding-right: 48px; }
 p { margin: 8px 0; }
 a { color: var(--ink); text-underline-offset: 3px; }
 strong { font-weight: 700; }
@@ -108,10 +107,9 @@ strong { font-weight: 700; }
   margin: 0;
   font-size: clamp(64px, 22vw, 96px);
   line-height: 1;
-  letter-spacing: -0.045em;
   font-variant-numeric: tabular-nums;
 }
-.hero-value span { font-size: 20px; letter-spacing: 0; margin-left: 8px; }
+.hero-value span { font-size: 20px; margin-left: 8px; }
 
 /* --- Pilules -------------------------------------------------------------- */
 
@@ -162,7 +160,6 @@ strong { font-weight: 700; }
 .line-title {
   font-size: 34px;
   line-height: 1.05;
-  letter-spacing: -0.035em;
   overflow-wrap: anywhere;
 }
 .line.is-done { color: var(--muted); }
@@ -172,9 +169,9 @@ strong { font-weight: 700; }
 .row { justify-content: space-between; align-items: center; gap: 12px; }
 div.row { cursor: default; }
 .row-main { min-width: 0; }
-.row-title { font-size: 22px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.row-title { font-size: 22px; overflow-wrap: anywhere; }
 .row-side { text-align: right; flex: none; }
-.row-side strong { font-size: 22px; font-weight: 400; letter-spacing: -0.02em; }
+.row-side strong { font-size: 22px; font-weight: 400; }
 
 /* --- Blocs ---------------------------------------------------------------- */
 
@@ -212,7 +209,6 @@ div.row { cursor: default; }
 .block-value {
   font-size: 52px;
   line-height: 0.9;
-  letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -282,7 +278,6 @@ button:focus-visible, .button:focus-visible { outline: 3px solid var(--cobalt); 
   font-size: 44px;
   font-weight: 400;
   line-height: 1;
-  letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
 }
 .notice { background: var(--citron); color: var(--on-color); }
@@ -363,7 +358,7 @@ legend { font-size: 14px; font-weight: 700; padding: 0; }
 /* --- Agenda ---------------------------------------------------------------- */
 
 .month-nav { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
-.month-nav strong { font-size: 26px; font-weight: 400; letter-spacing: -0.03em; text-transform: capitalize; }
+.month-nav strong { font-size: 26px; font-weight: 400; text-transform: capitalize; }
 .month-nav button.icon { border: var(--hair); font-size: 22px; }
 .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-top: 10px; }
 .dow { text-align: center; color: var(--muted); font-size: 12px; padding: 4px 0; }
@@ -390,7 +385,7 @@ legend { font-size: 14px; font-weight: 700; padding: 0; }
 
 h4 { font-size: 13px; font-weight: 700; margin: 24px 0 6px; padding-top: 10px; border-top: var(--rule); }
 .guide { border-top: var(--hair); padding: 10px 0; }
-.guide summary { min-height: 44px; display: flex; align-items: center; font-size: 20px; letter-spacing: -0.02em; cursor: pointer; }
+.guide summary { min-height: 44px; display: flex; align-items: center; font-size: 20px; cursor: pointer; }
 .guide .badge { margin-top: 4px; }
 .guide ul { margin: 8px 0; padding-left: 20px; }
 .guide li { margin: 6px 0; }
